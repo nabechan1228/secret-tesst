@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Advanced Planetarium with Constellations</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #000;
+        overflow: hidden;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        user-select: none;
+      }
+      canvas {
+        background-color: #000;
+        cursor: grab;
+      }
+      canvas:active {
+        cursor: grabbing;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="skyCanvas" width="800" height="600"></canvas>
+
+    <script>
+      // 2. 星データ（オリオン座っぽい配置にデータを調整しました）
+      const csvData = `
+      star_id,star_name,x,y,magnitude
+      1,Betelgeuse,350,200,4.5
+      2,Rigel,450,400,5.0
+      3,Bellatrix,450,220,3.5
+      4,Saiph,350,380,3.0
+      5,Alnitak,390,300,3.0
+      6,Alnilam,400,300,3.0
+      7,Mintaka,410,300,3.0
+      8,IsolatedStar,100,100,1.5
+      9,IsolatedStar2,650,500,2.0
+      `.trim();
+
+      // 課題1の解決：星座線データ（どの星とどの星を結ぶか）
+      const constellationLines = [
+          { from: 1, to: 3 }, // ベテルギウス - ベラトリックス（肩の線）
+          { from: 3, to: 7 }, // ベラトリックス - 三つ星の右
+          { from: 7, to: 6 }, // 三つ星（右 - 中）
+          { from: 6, to: 5 }, // 三つ星（中 - 左）
+          { from: 5, to: 1 }, // 三つ星の左 - ベテルギウス
+          { from: 5, to: 2 }, // 三つ星の左 - リゲル（足）
+          { from: 2, to: 4 }, // リゲル - サイフ（裾の線）
+          { from: 4, to: 7 }  // サイフ - 三つ星の右
+      ];
+
+      const parseCSV = (csv) => {
+          return csv.split('\n').slice(1).map(line => {
+              const v = line.split(',');
+              return { id: Number(v[0]), name: v[1], x: Number(v[2]), y: Number(v[3]), magnitude: Number(v[4]) };
+          });
+      };
+
+      const starsData = parseCSV(csvData);
+
+      const canvas = document.getElementById('skyCanvas');
+      const ctx = canvas.getContext('2d');
+      const screenWidth = canvas.width;
+      const screenHeight = canvas.height;
+
+      // 星空の位置とズームの状態管理
+      let offsetX = 0;
+      let offsetY = 0;
+      let scale = 1.0; // 課題2のズーム倍率（1.0 = 100%）
+
+      // マウスドラッグの状態管理
+      let isDragging = false;
+      let previousMouseX = 0;
+      let previousMouseY = 0;
+
+      // ==========================================
+      // イベント監視（ドラッグ ＆ ホイールズーム）
+      // ==========================================
+      canvas.addEventListener('mousedown', (e) => {
+          isDragging = true;
+          previousMouseX = e.clientX;
+          previousMouseY = e.clientY;
+      });
+
+      canvas.addEventListener('mousemove', (e) => {
+          if (!isDragging) return;
+          offsetX += e.clientX - previousMouseX;
+          offsetY += e.clientY - previousMouseY;
+          previousMouseX = e.clientX;
+          previousMouseY = e.clientY;
+      });
+
+      window.addEventListener('mouseup', () => { isDragging = false; });
+
+      // 課題2の解決：マウスホイールイベントでscaleを変更
+      canvas.addEventListener('wheel', (e) => {
+          e.preventDefault(); // 画面全体のスクロールを防止
+
+          // ホイールの回転方向に応じて拡大・縮小
+          if (e.deltaY < 0) {
+              scale *= 1.1; // 拡大
+          } else {
+              scale /= 1.1; // 縮小
+          }
+
+          // 極端な拡大・縮小を防ぐガード処理（制限をかける）
+          if (scale < 0.3) scale = 0.3;
+          if (scale > 5.0) scale = 5.0;
+      }, { passive: false });
+
+
+      // ==========================================
+      // 描画ロジック
+      // ==========================================
+
+      // 星の位置をドラッグとズームを考慮して計算する関数（共通化）
+      const getTransformedCoordinates = (starX, starY) => {
+          // 1. ドラッグによる平行移動を適用
+          let tx = starX + offsetX;
+          let ty = starY + offsetY;
+
+          // 画面の中心（基準点）
+          const centerX = screenWidth / 2;
+          const centerY = screenHeight / 2;
+
+          // 2. 画面の中心を基準にズーム（縮尺）計算を行う
+          tx = centerX + (tx - centerX) * scale;
+          ty = centerY + (ty - centerY) * scale;
+
+          return { x: tx, y: ty };
+      };
+
+      const drawGlowingStar = (ctx, x, y, magnitude) => {
+          // ズーム倍率（scale）に応じて星自体のサイズも変化させる
+          const radius = magnitude * 1.5 * scale;
+          if (radius < 0.5) return; // 小さすぎたら描画しない
+
+          const glowRadius = radius * 3;
+          const gradient = ctx.createRadialGradient(x, y, 0, x, y, glowRadius);
+
+          gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+          gradient.addColorStop(0.2, 'rgba(100, 180, 255, 0.6)');
+          gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+          ctx.fillStyle = gradient;
+          ctx.beginPath();
+          ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
+          ctx.fill();
+      };
+
+      const animate = () => {
+          ctx.fillStyle = '#000000';
+          ctx.fillRect(0, 0, screenWidth, screenHeight);
+
+          // 計算した座標を一次保持するマップ（星座線を描くときにIDで即座に座標を引くため）
+          const coordMap = {};
+
+          // 1. 全ての星の現フレームでの座標を計算して記録
+          starsData.forEach((star) => {
+              const coords = getTransformedCoordinates(star.x, star.y);
+              coordMap[star.id] = coords;
+          });
+
+          // 2. 課題1の解決：星座線を描画する
+          ctx.strokeStyle = 'rgba(100, 200, 255, 0.3)'; // 薄い青色の線
+          ctx.lineWidth = 1 * scale; // ズームに合わせて線の太さも変える
+          constellationLines.forEach((line) => {
+              const starFrom = coordMap[line.from];
+              const starTo = coordMap[line.to];
+
+              if (starFrom && starTo) {
+                  ctx.beginPath();
+                  ctx.moveTo(starFrom.x, starFrom.y); // スタート地点へペンを移動
+                  ctx.lineTo(starTo.x, starTo.y);     // ゴール地点へ線を引く
+                  ctx.stroke();
+              }
+          });
+
+          // 3. 星自体を描画（線の上に星が乗るように後に描画）
+          starsData.forEach((star) => {
+              const coords = coordMap[star.id];
+              drawGlowingStar(ctx, coords.x, coords.y, star.magnitude);
+          });
+
+          requestAnimationFrame(animate);
+      };
+
+      animate();
+    </script>
+  </body>
+</html>
