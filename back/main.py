@@ -108,44 +108,29 @@ def get_sky(
     lst = get_local_sidereal_time(jd, lng)
     
     visible_stars = []
-    star_map = {}
     
     # 全ての星の地平座標を計算
     for star in STARS:
         pos = equatorial_to_horizontal(star["ra"], star["dec"], lst, lat)
-        
-        # 地平線の下少し（-15度）まで描画対象に含める（ドラッグ/ズームによる表示領域の余裕のため）
-        if pos["alt"] >= -15.0:
-            star_data = {
-                "id": star["id"],
-                "name_en": star["name_en"],
-                "name_ja": star["name_ja"],
-                "mag": star["mag"],
-                "az": pos["az"],
-                "alt": pos["alt"]
-            }
-            visible_stars.append(star_data)
-            star_map[star["id"]] = star_data
-            
-    # 地平線上の星同士を結ぶ星座線をフィルタリング
-    visible_lines = []
-    for line in CONSTELLATION_LINES:
-        if line["from"] in star_map and line["to"] in star_map:
-            visible_lines.append(line)
-            
-    # アステリズム（夏の大三角など）のフィルタリング
-    visible_asterisms = []
-    for ast in ASTERISMS:
-        if ast["from"] in star_map and ast["to"] in star_map:
-            visible_asterisms.append(ast)
+        star_data = {
+            "id": star["id"],
+            "name_en": star["name_en"],
+            "name_ja": star["name_ja"],
+            "ra": star["ra"],
+            "dec": star["dec"],
+            "mag": star["mag"],
+            "az": pos["az"],
+            "alt": pos["alt"]
+        }
+        visible_stars.append(star_data)
             
     return {
         "datetime": dt_utc.isoformat(),
         "julian_date": jd,
         "lst_deg": lst,
         "stars": visible_stars,
-        "constellations": visible_lines,
-        "asterisms": visible_asterisms
+        "constellations": CONSTELLATION_LINES,
+        "asterisms": ASTERISMS
     }
 
 if __name__ == "__main__":

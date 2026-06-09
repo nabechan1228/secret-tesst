@@ -1,12 +1,11 @@
-// Stellaris - Professional Interactive Planetarium Logic
-// 天体物理学座標計算 ＆ HTML5 Canvas によるリアルタイム極射投影描画
+import * as THREE from 'three';
 
 interface Star {
   id: number;
   name_en: string;
   name_ja: string;
-  ra: number;  // 赤経 (Hours: 0 ~ 24)
-  dec: number; // 赤緯 (Degrees: -90 ~ 90)
+  ra: number;  // 赤経 (Hours)
+  dec: number; // 赤緯 (Degrees)
   mag: number; // 等級 (Magnitude)
 }
 
@@ -22,7 +21,7 @@ interface AsterismLine {
   label: string;
 }
 
-// バックエンドから最初に取得する全天体カタログ情報
+// 恒星・星座データ
 let starCatalog: Star[] = [];
 let constellationLines: ConstellationLine[] = [];
 let asterismLines: AsterismLine[] = [];
@@ -37,28 +36,44 @@ let isTimeFlowing = true;
 let timeSpeed = 1; // 時間加速倍率
 
 // 視野設定
-let viewAzimuth = 0;   // カメラの中心方位角 (度, 0:北, 90:東)
-let viewAltitude = 90;  // カメラの中心仰角 (度, 90:天頂, 0:地平線)
-let zoomScale = 1.0;   // ズーム倍率
+let viewAzimuth = 180;   // カメラの中心方位角 (度, 180: 南を向く)
+let viewAltitude = 45;   // カメラの仰角 (度, 45度見上げる)
+let baseFov = 60;        // カメラの基準視野角 (ズームで可変)
 
 // 描画設定
 let showConstellations = true;
 let showAsterisms = true;
 let showStarNames = true;
 
-// マウスインタラクションの状態
+// マウスインタラクション
 let isDragging = false;
 let startMouseX = 0;
 let startMouseY = 0;
-let startAzimuth = 0;
-let startAltitude = 90;
+let startAzimuth = 180;
+let startAltitude = 45;
 
-// Canvas関連
-let canvas: HTMLCanvasElement;
-let ctx: CanvasRenderingContext2D;
+// WebGL (Three.js) & 2D Overlay 関連
+let webglCanvas: HTMLCanvasElement;
+let overlayCanvas: HTMLCanvasElement;
+let ctx2d: CanvasRenderingContext2D;
+
+let scene: THREE.Scene;
+let camera: THREE.PerspectiveCamera;
+let renderer: THREE.WebGLRenderer;
+
+// 3D空間オブジェクトへのポインタ
+const starObjects: { [id: number]: THREE.Sprite } = {};
+const starDataMap: { [id: number]: Star } = {};
+let constellationMesh: THREE.LineSegments;
+let asterismMesh: THREE.LineSegments;
+
+const constellationPositions = new Float32Array(500 * 3); // 結線用バッファ
+const asterismPositions = new Float32Array(100 * 3);
+
+const DOME_RADIUS = 500; // 天球の半径
 
 // ==========================================
-// 天体計算アルゴリズム (Astronomical Math)
+// 天体計算アルゴリズム
 // ==========================================
 
 function getJulianDate(date: Date): number {
@@ -67,7 +82,7 @@ function getJulianDate(date: Date): number {
   const d = date.getUTCDate() + 
             date.getUTCHours() / 24.0 + 
             date.getUTCMinutes() / 1440.0 + 
-            date.getUTCSeconds() / 86000.0;
+            date.getUTCSeconds() / 86400.0;
   
   let year = y;
   if (m <= 2) {
@@ -122,334 +137,432 @@ function equatorialToHorizontal(ra: number, dec: number, lstDeg: number, latDeg:
   };
 }
 
-// カメラ視野の回転を考慮した座標投影
-interface ScreenCoord {
-  x: number;
-  y: number;
-  visible: boolean;
+// 地平座標 (Az, Alt) から 3D直交座標 (X, Y, Z) に変換
+// Y軸が天頂方向, Z軸が北方向, X軸が東方向とする
+function horizonToCartesian(azDeg: number, altDeg: number, radius: number): THREE.Vector3 {
+  const az = azDeg * Math.PI / 180.0;
+  const alt = altDeg * Math.PI / 180.0;
+  
+  // X: 東, Y: 天頂, Z: 北 (Zのマイナスが真北になるように計算)
+  const x = radius * Math.cos(alt) * Math.sin(az);
+  const y = radius * Math.sin(alt);
+  const z = -radius * Math.cos(alt) * Math.cos(az);
+  
+  return new THREE.Vector3(x, y, z);
 }
 
-function projectToScreen(az: number, alt: number, width: number, height: number): ScreenCoord {
-  const centerX = width / 2;
-  const centerY = height / 2;
-  const maxRadius = Math.min(width, height) / 2;
-
-  // カメラ視野中心からの相対位置に3次元回転を適用
-  const azRelRad = (az - viewAzimuth) * Math.PI / 180.0;
-  const altRad = alt * Math.PI / 180.0;
-
-  // 1. 地平座標を3次元単位ベクトルに変換
-  const vx = Math.cos(altRad) * Math.sin(azRelRad);
-  const vy = Math.cos(altRad) * Math.cos(azRelRad);
-  const vz = Math.sin(altRad);
-
-  // 2. カメラの仰角 (viewAltitude) に合わせた X 軸まわりの回転回転
-  // カメラ天頂角 theta_v = 90 - viewAltitude
-  const thetaV = (90.0 - viewAltitude) * Math.PI / 180.0;
-  const cosT = Math.cos(thetaV);
-  const sinT = Math.sin(thetaV);
-
-  // 回転後の座標 (カメラ基準の3次元ベクトル)
-  const vxc = vx;
-  const vyc = vy * cosT - vz * sinT;
-  const vzc = vy * sinT + vz * cosT;
-
-  // カメラ基準での見かけ上の高度と方位角を算出
-  const altCam = Math.asin(Math.max(-1.0, Math.min(1.0, vzc)));
-  const azCam = Math.atan2(vxc, vyc);
-
-  // 見かけの高度が -15度以下の星はクリップ（視野外）
-  if (altCam < -15.0 * Math.PI / 180.0) {
+// 3D座標を2Dスクリーン座標に投影する関数 (星名描画用)
+const tempV = new THREE.Vector3();
+function getScreenPosition(pos3d: THREE.Vector3): { x: number; y: number; visible: boolean } {
+  tempV.copy(pos3d);
+  tempV.project(camera); // NDC座標 (-1 から 1) に変換
+  
+  // カメラの背後にある場合、または視野外は非表示にする
+  if (tempV.z > 1 || Math.abs(tempV.x) > 1 || Math.abs(tempV.y) > 1) {
     return { x: 0, y: 0, visible: false };
   }
-
-  // 3. 極射投影 (Stereographic Projection)
-  // 天頂からの角距離 theta
-  const thetaCam = Math.PI / 2.0 - altCam;
   
-  // 投影半径 r = 2 * R * tan(theta / 2)
-  // theta = 90° (地平線) のときにドームの端 (maxRadius) に一致させるため、
-  // r = maxRadius * tan(theta/2) / tan(45°) = maxRadius * tan(theta/2)
-  const r = maxRadius * zoomScale * Math.tan(thetaCam / 2.0);
-
-  // 画面上の XY 座標に展開
-  const px = centerX + r * Math.sin(azCam);
-  const py = centerY - r * Math.cos(azCam);
-
-  // ドーム（円）の外側に飛び出た場合は非表示にする (クリッピング)
-  const distFromCenter = Math.hypot(px - centerX, py - centerY);
-  if (distFromCenter > maxRadius - 2) {
-    return { x: px, y: py, visible: false };
-  }
-
-  return { x: px, y: py, visible: true };
+  const x = (tempV.x * 0.5 + 0.5) * overlayCanvas.width;
+  const y = (tempV.y * -0.5 + 0.5) * overlayCanvas.height;
+  
+  return { x, y, visible: true };
 }
 
 // ==========================================
-// API通信と初期化
+// 3Dオブジェクトテクスチャ作成
 // ==========================================
 
-async function fetchStarCatalog() {
+// 星の輝き用の円形グラデーションテクスチャを Canvas から動的に生成
+function createStarTexture(isGiant: boolean): THREE.Texture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d')!;
+  
+  const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  if (isGiant) {
+    // 赤色巨星用 (ベテルギウスなど)
+    grad.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
+    grad.addColorStop(0.15, 'rgba(255, 230, 200, 1.0)');
+    grad.addColorStop(0.35, 'rgba(255, 120, 60, 0.7)');
+    grad.addColorStop(0.7, 'rgba(255, 60, 20, 0.15)');
+    grad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
+  } else {
+    // 通常・青白い恒星用
+    grad.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
+    grad.addColorStop(0.15, 'rgba(230, 245, 255, 1.0)');
+    grad.addColorStop(0.35, 'rgba(100, 180, 255, 0.6)');
+    grad.addColorStop(0.7, 'rgba(50, 120, 255, 0.15)');
+    grad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
+  }
+  
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 64, 64);
+  
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+// ==========================================
+// 3Dシーン初期化 (Three.js Setup)
+// ==========================================
+
+function init3D() {
+  webglCanvas = document.getElementById('webglCanvas') as HTMLCanvasElement;
+  overlayCanvas = document.getElementById('overlayCanvas') as HTMLCanvasElement;
+  ctx2d = overlayCanvas.getContext('2d')!;
+
+  // 1. Scene の作成
+  scene = new THREE.Scene();
+
+  // 2. Camera の作成 (PerspectiveCamera で視野角 fov によるズームに対応)
+  camera = new THREE.PerspectiveCamera(baseFov, 1, 0.1, 2000);
+  camera.position.set(0, 0, 0); // 観測者は原点に位置する
+
+  // 3. Renderer の作成
+  renderer = new THREE.WebGLRenderer({ canvas: webglCanvas, antialias: true, alpha: false });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+  // 4. 地平線（地面の遮蔽ディスク）を追加
+  // 天球の半径より少し外側 (R=502) にディスクを配置し、地平線下の星が隠れるようにする
+  const groundGeo = new THREE.RingGeometry(0, DOME_RADIUS + 5, 64);
+  const groundMat = new THREE.MeshBasicMaterial({
+    color: 0x020309,
+    side: THREE.DoubleSide,
+    depthWrite: true
+  });
+  const ground = new THREE.Mesh(groundGeo, groundMat);
+  ground.rotation.x = Math.PI / 2; // 水平にする
+  ground.position.y = -1; // カメラの足元わずか下に配置
+  scene.add(ground);
+
+  // 5. 地平線の円環（境界線）を追加
+  const ringGeo = new THREE.RingGeometry(DOME_RADIUS - 1, DOME_RADIUS + 1, 64);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0x00bcd4,
+    side: THREE.DoubleSide
+  });
+  const horizonRing = new THREE.Mesh(ringGeo, ringMat);
+  horizonRing.rotation.x = Math.PI / 2;
+  horizonRing.position.y = -0.5;
+  scene.add(horizonRing);
+
+  // 6. 星座線オブジェクトの作成 (バッファ更新型)
+  const constGeo = new THREE.BufferGeometry();
+  constGeo.setAttribute('position', new THREE.BufferAttribute(constellationPositions, 3));
+  const constMat = new THREE.LineBasicMaterial({
+    color: 0x468cff,
+    transparent: true,
+    opacity: 0.28,
+    linewidth: 1
+  });
+  constellationMesh = new THREE.LineSegments(constGeo, constMat);
+  scene.add(constellationMesh);
+
+  // 7. アステリズムオブジェクトの作成
+  const astGeo = new THREE.BufferGeometry();
+  astGeo.setAttribute('position', new THREE.BufferAttribute(asterismPositions, 3));
+  const astMat = new THREE.LineBasicMaterial({
+    color: 0xffb432,
+    transparent: true,
+    opacity: 0.32,
+    linewidth: 1
+  });
+  asterismMesh = new THREE.LineSegments(astGeo, astMat);
+  scene.add(asterismMesh);
+}
+
+// API からデータを読み込む
+// API からデータを読み込む
+async function loadStarCatalog() {
+  const originalCatalog: Star[] = [
+    {id: 1, name_en: "Sirius", name_ja: "シリウス", ra: 6.75, dec: -16.72, mag: -1.46},
+    {id: 2, name_en: "Canopus", name_ja: "カノープス", ra: 6.4, dec: -52.7, mag: -0.74},
+    {id: 3, name_en: "Arcturus", name_ja: "アークトゥルス", ra: 14.26, dec: 19.18, mag: -0.05},
+    {id: 4, name_en: "Vega", name_ja: "ベガ", ra: 18.62, dec: 38.78, mag: 0.03},
+    {id: 5, name_en: "Capella", name_ja: "カペラ", ra: 5.28, dec: 46.0, mag: 0.08},
+    {id: 6, name_en: "Rigel", name_ja: "リゲル", ra: 5.24, dec: -8.2, mag: 0.13},
+    {id: 7, name_en: "Procyon", name_ja: "プロキオン", ra: 7.66, dec: 5.22, mag: 0.34},
+    {id: 8, name_en: "Betelgeuse", name_ja: "ベテルギウス", ra: 5.92, dec: 7.41, mag: 0.42},
+    {id: 9, name_en: "Altair", name_ja: "アルタイル", ra: 19.85, dec: 8.87, mag: 0.76},
+    {id: 10, name_en: "Aldebaran", name_ja: "アルデバラン", ra: 4.6, dec: 16.51, mag: 0.85},
+    {id: 11, name_en: "Antares", name_ja: "アンタレス", ra: 16.49, dec: -26.43, mag: 1.06},
+    {id: 12, name_en: "Spica", name_ja: "スピカ", ra: 13.42, dec: -11.16, mag: 0.98},
+    {id: 13, name_en: "Pollux", name_ja: "ポルックス", ra: 7.75, dec: 28.02, mag: 1.14},
+    {id: 14, name_en: "Deneb", name_ja: "デネブ", ra: 20.69, dec: 45.28, mag: 1.25},
+    {id: 15, name_en: "Fomalhaut", name_ja: "フォーマルハウト", ra: 22.96, dec: -29.62, mag: 1.16},
+    {id: 16, name_en: "Regulus", name_ja: "レグルス", ra: 10.14, dec: 11.96, mag: 1.36},
+    {id: 17, name_en: "Castor", name_ja: "カストル", ra: 7.58, dec: 31.89, mag: 1.58},
+    {id: 18, name_en: "Polaris", name_ja: "ポラリス", ra: 2.53, dec: 89.26, mag: 1.97},
+    {id: 21, name_en: "Bellatrix", name_ja: "ベラトリックス", ra: 5.42, dec: 6.35, mag: 1.64},
+    {id: 22, name_en: "Saiph", name_ja: "サイフ", ra: 5.79, dec: -9.67, mag: 2.06},
+    {id: 23, name_en: "Alnitak", name_ja: "アルニタク", ra: 5.68, dec: -1.94, mag: 1.74},
+    {id: 24, name_en: "Alnilam", name_ja: "アルニラム", ra: 5.6, dec: -1.2, mag: 1.69},
+    {id: 25, name_en: "Mintaka", name_ja: "ミンタカ", ra: 5.53, dec: -0.3, mag: 2.23},
+    {id: 31, name_en: "Dubhe", name_ja: "ドゥーベ", ra: 11.06, dec: 61.75, mag: 1.79},
+    {id: 32, name_en: "Merak", name_ja: "メラク", ra: 11.03, dec: 56.38, mag: 2.34},
+    {id: 33, name_en: "Phecda", name_ja: "フェクダ", ra: 11.89, dec: 53.69, mag: 2.41},
+    {id: 34, name_en: "Megrez", name_ja: "メグレス", ra: 12.25, dec: 57.03, mag: 3.32},
+    {id: 35, name_en: "Alioth", name_ja: "アリオト", ra: 12.9, dec: 55.96, mag: 1.76},
+    {id: 36, name_en: "Mizar", name_ja: "ミザール", ra: 13.4, dec: 54.92, mag: 2.23},
+    {id: 37, name_en: "Alkaid", name_ja: "アルカイド", ra: 13.79, dec: 49.31, mag: 1.85},
+    {id: 41, name_en: "Shedar", name_ja: "シェダル", ra: 0.68, dec: 56.54, mag: 2.24},
+    {id: 42, name_en: "Caph", name_ja: "カフ", ra: 0.15, dec: 59.15, mag: 2.28},
+    {id: 43, name_en: "Tsih", name_ja: "ツィー", ra: 0.95, dec: 60.72, mag: 2.15},
+    {id: 44, name_en: "Ruchbah", name_ja: "ルクバー", ra: 1.43, dec: 60.23, mag: 2.66},
+    {id: 45, name_en: "Segin", name_ja: "セギン", ra: 1.9, dec: 63.67, mag: 3.35},
+    {id: 51, name_en: "Sadr", name_ja: "サドル", ra: 20.37, dec: 40.26, mag: 2.23},
+    {id: 52, name_en: "Albireo", name_ja: "アルビレオ", ra: 19.51, dec: 27.96, mag: 3.05},
+    {id: 53, name_en: "Gienah", name_ja: "ジェナー", ra: 20.77, dec: 33.97, mag: 2.48},
+    {id: 54, name_en: "Fawaris", name_ja: "ファワリス", ra: 19.61, dec: 45.13, mag: 2.87},
+    {id: 61, name_en: "Sulafat", name_ja: "スラファト", ra: 18.98, dec: 32.68, mag: 3.24},
+    {id: 62, name_en: "Sheliak", name_ja: "シェリアク", ra: 18.83, dec: 33.36, mag: 3.52},
+    {id: 63, name_en: "Aladfar", name_ja: "アラドファ", ra: 18.74, dec: 37.6, mag: 4.3},
+    {id: 71, name_en: "Alshain", name_ja: "アルシャイン", ra: 19.92, dec: 6.4, "mag": 3.71},
+    {id: 72, name_en: "Tarazed", name_ja: "タラゼド", ra: 19.77, dec: 10.61, "mag": 2.72},
+    {id: 81, name_en: "Acrux", name_ja: "アクルックス", ra: 12.44, dec: -63.1, mag: 0.77},
+    {id: 82, name_en: "Mimosa", name_ja: "ミモザ", ra: 12.79, dec: -59.68, mag: 1.25},
+    {id: 83, name_en: "Gacrux", name_ja: "ガクルックス", ra: 12.52, dec: -57.11, mag: 1.59},
+    {id: 84, name_en: "Imai", name_ja: "イマイ", ra: 12.25, dec: -58.75, mag: 2.79}
+  ];
+
+  const defaultConstellationLines: ConstellationLine[] = [
+    { from: 8, to: 21, constellation: "Orion" },
+    { from: 21, to: 25, constellation: "Orion" },
+    { from: 25, to: 24, constellation: "Orion" },
+    { from: 24, to: 23, constellation: "Orion" },
+    { from: 23, to: 8, constellation: "Orion" },
+    { from: 23, to: 6, constellation: "Orion" },
+    { from: 6, to: 22, constellation: "Orion" },
+    { from: 22, to: 25, constellation: "Orion" },
+    { from: 31, to: 32, constellation: "Ursa Major" },
+    { from: 32, to: 33, constellation: "Ursa Major" },
+    { from: 33, to: 34, constellation: "Ursa Major" },
+    { from: 34, to: 31, constellation: "Ursa Major" },
+    { from: 34, to: 35, constellation: "Ursa Major" },
+    { from: 35, to: 36, constellation: "Ursa Major" },
+    { from: 36, to: 37, constellation: "Ursa Major" },
+    { from: 42, to: 41, constellation: "Cassiopeia" },
+    { from: 41, to: 43, constellation: "Cassiopeia" },
+    { from: 43, to: 44, constellation: "Cassiopeia" },
+    { from: 44, to: 45, constellation: "Cassiopeia" },
+    { from: 14, to: 51, constellation: "Cygnus" },
+    { from: 51, to: 52, constellation: "Cygnus" },
+    { from: 51, to: 53, constellation: "Cygnus" },
+    { from: 51, to: 54, constellation: "Cygnus" },
+    { from: 4, to: 63, constellation: "Lyra" },
+    { from: 4, to: 62, constellation: "Lyra" },
+    { from: 62, to: 61, constellation: "Lyra" },
+    { from: 61, to: 4, constellation: "Lyra" },
+    { from: 9, to: 71, constellation: "Aquila" },
+    { from: 9, to: 72, constellation: "Aquila" },
+    { from: 81, to: 83, constellation: "Crux" },
+    { from: 82, to: 84, constellation: "Crux" }
+  ];
+
+  const defaultAsterismLines: AsterismLine[] = [
+    { from: 4, to: 14, label: "Summer Triangle" },
+    { from: 14, to: 9, label: "Summer Triangle" },
+    { from: 9, to: 4, label: "Summer Triangle" }
+  ];
+
   try {
-    // バックエンドから星空データを初期取得（現在地基準で一発取得）
+    // バックエンドから星カタログと線を一発取得
     const response = await fetch(`http://localhost:8000/api/sky?lat=${latitude}&lng=${longitude}`);
-    if (!response.ok) throw new Error('API request failed');
-    
-    // バックエンド側のスターデータを元カタログとして保持する
-    // 今回は初期化用スタティックな恒星情報をローカルへ引き込みます
+    if (!response.ok) throw new Error('API server down');
     const data = await response.json();
-    
-    // 星座結線とアステリズムデータをセット
+
     constellationLines = data.constellations;
     asterismLines = data.asterisms;
-    
-    // 本格的な星リストは、RA/Decを含む情報としてスターリスト（star_catalog.py側）をベースにします。
-    // API経由で直接カタログを取得するためのフォールバック定義
-    const catalogResponse = await fetch(`http://localhost:8000/api/sky?lat=90&lng=0`); // 北極基準なら全恒星が一度に得られる
-    const catalogData = await catalogResponse.json();
-    
-    // 恒星の赤道座標データを再構築
-    // バックエンドで保持している元の STARS の値に相当するデータをAPI経由でマッピング
-    // (デモ用に直接フロントでマッピングします)
-    starCatalog = catalogData.stars.map((s: any) => {
-      // 逆算するか、またはバックエンドが持っている赤道座標データを設定
-      // 本来は star_catalog を直接APIで提供するのが綺麗。
-      // ここでは、緯度90度の時の LST を用いて Alt/Az から RA/Dec を逆算します。
-      // LST90 の時、北極点(lat=90)では:
-      // Dec = Alt
-      // HA = LST - RA -> RA = LST - HA
-      // 北極点では Az = 180 - HA (南から西回り) 等。
-      // もっとシンプルに、あらかじめフロント側にも天体座標を持たせます。
-      return {
-        id: s.id,
-        name_en: s.name_en,
-        name_ja: s.name_ja,
-        mag: s.mag,
-        // 近似的な逆算
-        ra: (catalogData.lst_deg - (180.0 - s.az)) / 15.0,
-        dec: s.alt
-      };
+    starCatalog = data.stars;
+    console.log("3D Catalog loaded successfully from API:", starCatalog.length, "stars.");
+  } catch (error) {
+    console.warn("Failed loading catalog from API. Falling back to local catalog.", error);
+    // フォールバックデータの設定
+    constellationLines = defaultConstellationLines;
+    asterismLines = defaultAsterismLines;
+    starCatalog = originalCatalog;
+  }
+
+  // テクスチャをあらかじめ作成
+  const textureNormal = createStarTexture(false);
+  const textureGiant = createStarTexture(true);
+
+  // 星の3Dスプライトオブジェクトの構築
+  starCatalog.forEach((star) => {
+    starDataMap[star.id] = star;
+
+    const isGiant = (star.id === 8 || star.id === 11); // ベテルギウスかアンタレスか
+    const material = new THREE.SpriteMaterial({
+      map: isGiant ? textureGiant : textureNormal,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
     });
 
-    // 逆算精度がズレないよう、主要な星の正しいRA/Decテーブルをフロントでも二重定義して同期させます。
-    // (APIが利用できない場合も考慮して、定義を直接ハードコード補正)
-    const originalCatalog = [
-      {id: 1, name_en: "Sirius", name_ja: "シリウス", ra: 6.75, dec: -16.72, mag: -1.46},
-      {id: 2, name_en: "Canopus", name_ja: "カノープス", ra: 6.4, dec: -52.7, mag: -0.74},
-      {id: 3, name_en: "Arcturus", name_ja: "アークトゥルス", ra: 14.26, dec: 19.18, mag: -0.05},
-      {id: 4, name_en: "Vega", name_ja: "ベガ", ra: 18.62, dec: 38.78, mag: 0.03},
-      {id: 5, name_en: "Capella", name_ja: "カペラ", ra: 5.28, dec: 46.0, mag: 0.08},
-      {id: 6, name_en: "Rigel", name_ja: "リゲル", ra: 5.24, dec: -8.2, mag: 0.13},
-      {id: 7, name_en: "Procyon", name_ja: "プロキオン", ra: 7.66, dec: 5.22, mag: 0.34},
-      {id: 8, name_en: "Betelgeuse", name_ja: "ベテルギウス", ra: 5.92, dec: 7.41, mag: 0.42},
-      {id: 9, name_en: "Altair", name_ja: "アルタイル", ra: 19.85, dec: 8.87, mag: 0.76},
-      {id: 10, name_en: "Aldebaran", name_ja: "アルデバラン", ra: 4.6, dec: 16.51, mag: 0.85},
-      {id: 11, name_en: "Antares", name_ja: "アンタレス", ra: 16.49, dec: -26.43, mag: 1.06},
-      {id: 12, name_en: "Spica", name_ja: "スピカ", ra: 13.42, dec: -11.16, mag: 0.98},
-      {id: 13, name_en: "Pollux", name_ja: "ポルックス", ra: 7.75, dec: 28.02, mag: 1.14},
-      {id: 14, name_en: "Deneb", name_ja: "デネブ", ra: 20.69, dec: 45.28, mag: 1.25},
-      {id: 15, name_en: "Fomalhaut", name_ja: "フォーマルハウト", ra: 22.96, dec: -29.62, mag: 1.16},
-      {id: 16, name_en: "Regulus", name_ja: "レグルス", ra: 10.14, dec: 11.96, mag: 1.36},
-      {id: 17, name_en: "Castor", name_ja: "カストル", ra: 7.58, dec: 31.89, mag: 1.58},
-      {id: 18, name_en: "Polaris", name_ja: "ポラリス (北極星)", ra: 2.53, dec: 89.26, mag: 1.97},
-      {id: 21, name_en: "Bellatrix", name_ja: "ベラトリックス", ra: 5.42, dec: 6.35, mag: 1.64},
-      {id: 22, name_en: "Saiph", "name_ja": "サイフ", "ra": 5.79, "dec": -9.67, "mag": 2.06},
-      {id: 23, name_en: "Alnitak", "name_ja": "アルニタク", "ra": 5.68, "dec": -1.94, "mag": 1.74},
-      {id: 24, name_en: "Alnilam", "name_ja": "アルニラム", "ra": 5.6, "dec": -1.2, "mag": 1.69},
-      {id: 25, name_en: "Mintaka", "name_ja": "ミンタカ", "ra": 5.53, "dec": -0.3, "mag": 2.23},
-      {id: 31, name_en: "Dubhe", "name_ja": "ドゥーベ", "ra": 11.06, "dec": 61.75, "mag": 1.79},
-      {id: 32, name_en: "Merak", "name_ja": "メラク", "ra": 11.03, "dec": 56.38, "mag": 2.34},
-      {id: 33, name_en: "Phecda", "name_ja": "フェクダ", "ra": 11.89, "dec": 53.69, "mag": 2.41},
-      {id: 34, name_en: "Megrez", "name_ja": "メグレス", "ra": 12.25, "dec": 57.03, "mag": 3.32},
-      {id: 35, name_en: "Alioth", "name_ja": "アリオト", "ra": 12.9, "dec": 55.96, "mag": 1.76},
-      {id: 36, name_en: "Mizar", "name_ja": "ミザール", "ra": 13.4, "dec": 54.92, "mag": 2.23},
-      {id: 37, name_en: "Alkaid", "name_ja": "アルカイド", "ra": 13.79, "dec": 49.31, "mag": 1.85},
-      {id: 41, name_en: "Shedar", "name_ja": "シェダル", "ra": 0.68, "dec": 56.54, "mag": 2.24},
-      {id: 42, name_en: "Caph", "name_ja": "カフ", "ra": 0.15, "dec": 59.15, "mag": 2.28},
-      {id: 43, name_en: "Tsih", "name_ja": "ツィー", "ra": 0.95, "dec": 60.72, "mag": 2.15},
-      {id: 44, name_en: "Ruchbah", "name_ja": "ルクバー", "ra": 1.43, "dec": 60.23, "mag": 2.66},
-      {id: 45, name_en: "Segin", "name_ja": "セギン", "ra": 1.9, "dec": 63.67, "mag": 3.35},
-      {id: 51, name_en: "Sadr", "name_ja": "サドル", "ra": 20.37, "dec": 40.26, "mag": 2.23},
-      {id: 52, name_en: "Albireo", "name_ja": "アルビレオ", "ra": 19.51, "dec": 27.96, "mag": 3.05},
-      {id: 53, name_en: "Gienah", "name_ja": "ジェナー", "ra": 20.77, "dec": 33.97, "mag": 2.48},
-      {id: 54, name_en: "Fawaris", "name_ja": "ファワリス", "ra": 19.61, "dec": 45.13, "mag": 2.87},
-      {id: 61, name_en: "Sulafat", "name_ja": "スラファト", "ra": 18.98, "dec": 32.68, "mag": 3.24},
-      {id: 62, name_en: "Sheliak", "name_ja": "シェリアク", "ra": 18.83, "dec": 33.36, "mag": 3.52},
-      {id: 63, name_en: "Aladfar", "name_ja": "アラドファ", "ra": 18.74, "dec": 37.6, "mag": 4.3},
-      {id: 71, name_en: "Alshain", "name_ja": "アルシャイン", "ra": 19.92, "dec": 6.4, "mag": 3.71},
-      {id: 72, name_en: "Tarazed", "name_ja": "タラゼド", "ra": 19.77, "dec": 10.61, "mag": 2.72},
-      {id: 81, name_en: "Acrux", "name_ja": "アクルックス", "ra": 12.44, "dec": -63.1, "mag": 0.77},
-      {id: 82, "name_en": "Mimosa", "name_ja": "ミモザ", "ra": 12.79, "dec": -59.68, "mag": 1.25},
-      {id: 83, "name_en": "Gacrux", "name_ja": "ガクルックス", "ra": 12.52, "dec": -57.11, "mag": 1.59},
-      {id: 84, "name_en": "Imai", "name_ja": "イマイ", "ra": 12.25, "dec": -58.75, "mag": 2.79}
-    ];
-    starCatalog = originalCatalog;
+    const sprite = new THREE.Sprite(material);
     
-    console.log("Star catalog loaded successfully:", starCatalog.length, "stars.");
-  } catch (error) {
-    console.error("Failed to connect to backend api. Working with local catalog:", error);
-    // APIサーバーが起動していない場合のフォールバック定義
-    // (フロント単体でも稼働可能にしておく)
-  }
+    // 等級に応じた星の見た目の初期サイズ
+    let scale = (5.0 - star.mag) * 2.6;
+    if (scale < 1.0) scale = 1.0;
+    sprite.scale.set(scale, scale, 1);
+    
+    scene.add(sprite);
+    starObjects[star.id] = sprite;
+  });
+
+  console.log("3D Catalog initialized with", starCatalog.length, "stars.");
 }
 
 // ==========================================
-// 描画エンジン (Rendering Engine)
+// レンダリング＆計算ループ
 // ==========================================
 
-function drawSky() {
-  const w = canvas.width;
-  const h = canvas.height;
-  const centerX = w / 2;
-  const centerY = h / 2;
-  const maxRadius = Math.min(w, h) / 2;
+function updatePositionsAndRender() {
+  if (!scene || starCatalog.length === 0) return;
 
-  // キャンバスクリア (宇宙の階調表現)
-  ctx.fillStyle = '#010103';
-  ctx.fillRect(0, 0, w, h);
-
-  // プラネタリウムドーム内のグラデーション
-  const domeGrad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, maxRadius);
-  domeGrad.addColorStop(0, '#060926');
-  domeGrad.addColorStop(0.7, '#02030b');
-  domeGrad.addColorStop(1, '#000000');
-  ctx.fillStyle = domeGrad;
-  ctx.beginPath();
-  ctx.arc(centerX, centerY, maxRadius, 0, Math.PI * 2);
-  ctx.fill();
+  const w = overlayCanvas.width;
+  const h = overlayCanvas.height;
 
   // 現時点のユリウス日と地方恒星時を計算
   const jd = getJulianDate(currentDate);
   const lst = getLocalSiderealTime(jd, longitude);
 
-  // 各数値をダッシュボードに反映
+  // ダッシュボードへの反映
   document.getElementById('stat-jd')!.textContent = jd.toFixed(5);
   const lstHrs = lst / 15.0;
   const lstH = Math.floor(lstHrs);
   const lstM = Math.floor((lstHrs - lstH) * 60);
   const lstS = Math.floor(((lstHrs - lstH) * 60 - lstM) * 60);
   document.getElementById('stat-lst')!.textContent = 
-    `${String(lstH).padStart(2, '0')}h ${String(lstM).padStart(2, '0')}m ${String(String(lstS).padStart(2, '0'))}s (${lst.toFixed(1)}°)`;
+    `${String(lstH).padStart(2, '0')}h ${String(lstM).padStart(2, '0')}m ${String(lstS).padStart(2, '0')}s (${lst.toFixed(1)}°)`;
   document.getElementById('stat-view')!.textContent = 
     `${viewAzimuth.toFixed(0)}° / ${viewAltitude.toFixed(0)}°`;
   document.getElementById('stat-zoom')!.textContent = 
-    `${Math.round(zoomScale * 100)}%`;
+    `${Math.round((60.0 / camera.fov) * 100)}%`;
 
-  // 1. 全星の現時刻での地平座標およびスクリーン投影座標を計算
-  const starPositions: { [id: number]: { sx: number; sy: number; visible: boolean; mag: number } } = {};
-  
+  // 1. 各星の3D位置を天体計算に基づいて更新
+  const current3DPositions: { [id: number]: THREE.Vector3 } = {};
+
   starCatalog.forEach((star) => {
-    // 赤道座標 (RA/Dec) -> 地平座標 (Az/Alt)
+    // 地平座標 (Alt/Az) を算出
     const hor = equatorialToHorizontal(star.ra, star.dec, lst, latitude);
-    // 地平座標 -> スクリーン座標 (X/Y)
-    const scr = projectToScreen(hor.az, hor.alt, w, h);
     
-    starPositions[star.id] = {
-      sx: scr.x,
-      sy: scr.y,
-      visible: scr.visible,
-      mag: star.mag
-    };
+    // 3D直交座標系 (X, Y, Z) にマッピング
+    const pos3d = horizonToCartesian(hor.az, hor.alt, DOME_RADIUS);
+    current3DPositions[star.id] = pos3d;
+
+    // Three.js のスプライト位置を更新
+    const sprite = starObjects[star.id];
+    if (sprite) {
+      sprite.position.copy(pos3d);
+      
+      // 等級に応じた瞬き効果の適用 (ランダム要素にサイン波を組み合わせ)
+      const twinkle = 0.82 + 0.18 * Math.sin(Date.now() * 0.005 + star.id * 23);
+      let size = (5.0 - star.mag) * 2.6 * twinkle;
+      if (size < 1.0) size = 1.0;
+      sprite.scale.set(size, size, 1);
+    }
   });
 
-  // 2. 星座線 (Constellation Lines) の描画
+  // 2. 星座線 (Constellation Lines) の頂点更新
   if (showConstellations) {
-    ctx.strokeStyle = 'rgba(70, 140, 255, 0.22)';
-    ctx.lineWidth = 1.2 * zoomScale;
-    ctx.shadowBlur = 0;
-    
+    let idx = 0;
     constellationLines.forEach((line) => {
-      const pFrom = starPositions[line.from];
-      const pTo = starPositions[line.to];
+      const pFrom = current3DPositions[line.from];
+      const pTo = current3DPositions[line.to];
       
-      if (pFrom?.visible && pTo?.visible) {
-        ctx.beginPath();
-        ctx.moveTo(pFrom.sx, pFrom.sy);
-        ctx.lineTo(pTo.sx, pTo.sy);
-        ctx.stroke();
+      if (pFrom && pTo && idx + 6 <= constellationPositions.length) {
+        constellationPositions[idx++] = pFrom.x;
+        constellationPositions[idx++] = pFrom.y;
+        constellationPositions[idx++] = pFrom.z;
+        constellationPositions[idx++] = pTo.x;
+        constellationPositions[idx++] = pTo.y;
+        constellationPositions[idx++] = pTo.z;
       }
     });
+    constellationMesh.geometry.setDrawRange(0, idx / 3);
+    constellationMesh.geometry.attributes.position.needsUpdate = true;
+    constellationMesh.visible = true;
+  } else {
+    constellationMesh.visible = false;
   }
 
-  // 3. アステリズム (Asterisms / 大三角など) の描画
+  // 3. アステリズム (Asterisms) の頂点更新
   if (showAsterisms) {
-    ctx.strokeStyle = 'rgba(255, 180, 50, 0.25)';
-    ctx.lineWidth = 1.0 * zoomScale;
-    ctx.setLineDash([4, 4]); // 破線にする
-    
+    let idx = 0;
     asterismLines.forEach((line) => {
-      const pFrom = starPositions[line.from];
-      const pTo = starPositions[line.to];
+      const pFrom = current3DPositions[line.from];
+      const pTo = current3DPositions[line.to];
       
-      if (pFrom?.visible && pTo?.visible) {
-        ctx.beginPath();
-        ctx.moveTo(pFrom.sx, pFrom.sy);
-        ctx.lineTo(pTo.sx, pTo.sy);
-        ctx.stroke();
+      if (pFrom && pTo && idx + 6 <= asterismPositions.length) {
+        asterismPositions[idx++] = pFrom.x;
+        asterismPositions[idx++] = pFrom.y;
+        asterismPositions[idx++] = pFrom.z;
+        asterismPositions[idx++] = pTo.x;
+        asterismPositions[idx++] = pTo.y;
+        asterismPositions[idx++] = pTo.z;
       }
     });
-    ctx.setLineDash([]); // 実線に戻す
+    asterismMesh.geometry.setDrawRange(0, idx / 3);
+    asterismMesh.geometry.attributes.position.needsUpdate = true;
+    asterismMesh.visible = true;
+  } else {
+    asterismMesh.visible = false;
   }
 
-  // 4. 星（恒星）自体の美しき描画
+  // 4. カメラの向きを決定 (方位角と仰角から注視点ターゲットを算出)
+  // 真上特異点（ジンバルロック）を防ぐため、viewAltitude は 89.9度以下に制限済み
+  const camAzRad = viewAzimuth * Math.PI / 180.0;
+  const camAltRad = viewAltitude * Math.PI / 180.0;
+  
+  // カメラ正面方向 (Z軸のマイナス方向が正面)
+  let targetX = Math.cos(camAltRad) * Math.sin(camAzRad);
+  let targetY = Math.sin(camAltRad);
+  let targetZ = -Math.cos(camAltRad) * Math.cos(camAzRad);
+  
+  if (isNaN(targetX) || isNaN(targetY) || isNaN(targetZ)) {
+    targetX = 0;
+    targetY = 1;
+    targetZ = -0.1;
+  }
+  
+  camera.lookAt(new THREE.Vector3(targetX, targetY, targetZ));
+
+  // 5. 3D レンダリングの実行
+  renderer.render(scene, camera);
+
+  // 6. 2D オーバーレイCanvas（星名、方位ラベルなど）のクリアと描画
+  ctx2d.clearRect(0, 0, w, h);
+
+  // 文字描画の設定
+  ctx2d.font = "11px 'Outfit', 'Noto Sans JP', sans-serif";
+  ctx2d.textBaseline = "middle";
+
+  // 星の名前の描画
   starCatalog.forEach((star) => {
-    const pos = starPositions[star.id];
-    if (!pos || !pos.visible) return;
+    const pos3d = current3DPositions[star.id];
+    if (!pos3d) return;
 
-    // 等級に応じた星の基礎サイズ計算 (等級が小さいほど、サイズが大きい)
-    // -1.5 (シリウス) ~ 4.5 までの階調
-    let baseRadius = (5.0 - pos.mag) * 0.9 * zoomScale;
-    if (baseRadius < 0.6) baseRadius = 0.6; // 最低描画サイズ
+    // 地平線より下（Y < 0）にある星はテキストを描画しない
+    if (pos3d.y < -5) return;
 
-    // 瞬きアニメーションの効果 (微細な揺らぎ)
-    const twinkleFactor = 0.85 + 0.15 * Math.sin(Date.now() * 0.005 + star.id * 17);
-    const radius = baseRadius * twinkleFactor;
-    
-    // 円形グラデーションによる「輝き」の表現
-    const glowRadius = radius * 3.5;
-    const gradient = ctx.createRadialGradient(pos.sx, pos.sy, 0, pos.sx, pos.sy, glowRadius);
-    
-    // 色調をスペクトル分類っぽく少し変える (ベテルギウスやアンタレスは赤み、ベガは青白)
-    let colorCenter = 'rgba(255, 255, 255, 1.0)';
-    let colorGlow = 'rgba(100, 180, 255, 0.45)';
-    
-    if (star.id === 8 || star.id === 11) { // ベテルギウス, アンタレス (赤色超巨星)
-      colorGlow = 'rgba(255, 120, 80, 0.5)';
-    } else if (star.id === 4 || star.id === 14) { // ベガ, デネブ (青白い高温星)
-      colorGlow = 'rgba(120, 220, 255, 0.55)';
-    }
-
-    gradient.addColorStop(0, colorCenter);
-    gradient.addColorStop(0.2, colorGlow);
-    gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
-
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.arc(pos.sx, pos.sy, glowRadius, 0, Math.PI * 2);
-    ctx.fill();
-
-    // 5. 星名の描画 (ONの場合)
-    if (showStarNames && pos.mag <= 2.2) { // 2.2等星より明るい星のみ名前表示
-      ctx.fillStyle = 'rgba(220, 230, 255, 0.7)';
-      ctx.font = `${Math.max(9, Math.min(12, 10 * zoomScale))}px 'Outfit', 'Noto Sans JP', sans-serif`;
-      ctx.fillText(star.name_ja, pos.sx + glowRadius * 0.4 + 4, pos.sy + 3);
+    const scr = getScreenPosition(pos3d);
+    if (scr.visible && showStarNames && star.mag <= 2.2) {
+      // 星のサイズに応じてテキストの位置をずらす
+      const offset = (5.0 - star.mag) * 3 + 8;
+      
+      // テキスト背景に薄い影を付けて見やすくする
+      ctx2d.fillStyle = 'rgba(0, 0, 0, 0.7)';
+      ctx2d.fillText(star.name_ja, scr.x + offset + 1, scr.y + 1);
+      
+      ctx2d.fillStyle = 'rgba(210, 225, 255, 0.8)';
+      ctx2d.fillText(star.name_ja, scr.x + offset, scr.y);
     }
   });
 
-  // 6. 地平線ドームの枠線と方位インジケーターの描画
-  ctx.strokeStyle = 'rgba(0, 188, 212, 0.45)';
-  ctx.lineWidth = 2.0;
-  ctx.shadowColor = 'rgba(0, 188, 212, 0.5)';
-  ctx.shadowBlur = 10;
-  
-  ctx.beginPath();
-  ctx.arc(centerX, centerY, maxRadius, 0, Math.PI * 2);
-  ctx.stroke();
-  
-  // 影リセット
-  ctx.shadowBlur = 0;
-
-  // 東西南北インジケーターの計算と配置
+  // 方位ラベル (N, E, S, W) を地平線の位置に重ねて描画
   const directions = [
     { name: "N", az: 0 },
     { name: "E", az: 90 },
@@ -457,32 +570,28 @@ function drawSky() {
     { name: "W", az: 270 }
   ];
 
-  ctx.fillStyle = 'rgba(0, 188, 212, 0.8)';
-  ctx.font = "bold 13px 'Outfit', sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
+  ctx2d.font = "bold 13px 'Outfit', sans-serif";
+  ctx2d.textAlign = "center";
 
   directions.forEach((dir) => {
-    // 方位の地平線上での高度は常に0度
-    const scr = projectToScreen(dir.az, 0, w, h);
+    const pos3d = horizonToCartesian(dir.az, 0, DOME_RADIUS);
+    const scr = getScreenPosition(pos3d);
     
-    // 地平線上(円周付近)に文字を描くためのクリップ調整
-    const dist = Math.hypot(scr.x - centerX, scr.y - centerY);
-    const scaleRatio = (maxRadius - 15) / dist;
-    
-    const dx = centerX + (scr.x - centerX) * scaleRatio;
-    const dy = centerY + (scr.y - centerY) * scaleRatio;
-    
-    ctx.fillText(dir.name, dx, dy);
+    if (scr.visible) {
+      ctx2d.fillStyle = 'rgba(0, 0, 0, 0.8)';
+      ctx2d.fillText(dir.name, scr.x + 1, scr.y + 1);
+      
+      ctx2d.fillStyle = 'rgba(0, 188, 212, 0.85)';
+      ctx2d.fillText(dir.name, scr.x, scr.y);
+    }
   });
 }
 
 // ==========================================
-// イベントハンドラ (UI Interactivity)
+// イベントリスナー
 // ==========================================
 
 function initEvents() {
-  // 1. 位置プリセットの選択
   const presetSelect = document.getElementById('site-preset') as HTMLSelectElement;
   const latInput = document.getElementById('input-lat') as HTMLInputElement;
   const lngInput = document.getElementById('input-lng') as HTMLInputElement;
@@ -510,7 +619,6 @@ function initEvents() {
     lngInput.value = String(longitude);
   });
 
-  // 数値手入力の同期
   latInput.addEventListener('input', () => {
     latitude = parseFloat(latInput.value) || 0;
   });
@@ -518,7 +626,6 @@ function initEvents() {
     longitude = parseFloat(lngInput.value) || 0;
   });
 
-  // 2. 時間のON/OFF & スピード
   const timeFlowCheckbox = document.getElementById('toggle-time-flow') as HTMLInputElement;
   const speedSlider = document.getElementById('time-speed') as HTMLInputElement;
   const speedLabel = document.getElementById('speed-label')!;
@@ -533,7 +640,6 @@ function initEvents() {
     speedLabel.textContent = `${timeSpeed}x`;
   });
 
-  // 初期日付をインプットに挿入
   const formatDate = (d: Date) => {
     const pad = (n: number) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
@@ -547,7 +653,6 @@ function initEvents() {
     }
   });
 
-  // 3. 表示トグル
   const constellationCheckbox = document.getElementById('toggle-constellations') as HTMLInputElement;
   const asterismCheckbox = document.getElementById('toggle-asterisms') as HTMLInputElement;
   const starNamesCheckbox = document.getElementById('toggle-star-names') as HTMLInputElement;
@@ -562,8 +667,8 @@ function initEvents() {
     showStarNames = starNamesCheckbox.checked;
   });
 
-  // 4. マウスドラッグによる方向移動 (カメラ操作)
-  canvas.addEventListener('mousedown', (e) => {
+  // 3D用のドラッグカメラ制御 (方位角・仰角を変更)
+  webglCanvas.addEventListener('mousedown', (e) => {
     isDragging = true;
     startMouseX = e.clientX;
     startMouseY = e.clientY;
@@ -577,54 +682,69 @@ function initEvents() {
     const dx = e.clientX - startMouseX;
     const dy = e.clientY - startMouseY;
     
-    // ドラッグ量に応じて方位・仰角を変更
-    // 感度を調節
-    viewAzimuth = (startAzimuth - dx * 0.15 / zoomScale) % 360.0;
+    // カメラの視野角(ズーム)に応じてドラッグ感度を変更
+    const sensitivity = 0.15 * (camera.fov / 60.0);
+    
+    // 左右で方位角 (Azimuth) を回転
+    viewAzimuth = (startAzimuth + dx * sensitivity) % 360.0;
     if (viewAzimuth < 0) viewAzimuth += 360.0;
     
-    viewAltitude = startAltitude + dy * 0.15 / zoomScale;
-    if (viewAltitude > 90) viewAltitude = 90; // 真上より先には行かない
-    if (viewAltitude < 5) viewAltitude = 5;    // 地平線スレスレでストップ
+    // 上下で仰角 (Altitude) を変更 (特異点を避けるため 5度 ~ 89.9度 に制限)
+    viewAltitude = startAltitude - dy * sensitivity;
+    viewAltitude = Math.max(5.0, Math.min(89.9, viewAltitude));
   });
 
   window.addEventListener('mouseup', () => {
     isDragging = false;
   });
 
-  // 5. ホイールによるズーム
-  canvas.addEventListener('wheel', (e) => {
+  // マウスホイールによるカメラ fov (視野角) ズーム制御
+  webglCanvas.addEventListener('wheel', (e) => {
     e.preventDefault();
+    
+    // 視野角を狭める = ズームイン, 広げる = ズームアウト
     if (e.deltaY < 0) {
-      zoomScale *= 1.1;
+      camera.fov /= 1.08; // ズームイン
     } else {
-      zoomScale /= 1.1;
+      camera.fov *= 1.08; // ズームアウト
     }
     
-    // リミット
-    zoomScale = Math.max(0.5, Math.min(8.0, zoomScale));
+    // fov の最大・最小の制限 (10度 ~ 75度)
+    camera.fov = Math.max(10.0, Math.min(75.0, camera.fov));
+    camera.updateProjectionMatrix();
   }, { passive: false });
 
-  // レスポンシブ対応 (Canvas解像度フィッティング)
-  const resizeCanvas = () => {
-    const container = document.getElementById('app-container')!;
-    const size = Math.min(container.clientWidth * 0.9, container.clientHeight * 0.9, 800);
-    canvas.width = size;
-    canvas.height = size;
+  // レスポンシブ対応 (3D レンダラーとオーバーレイをコンテナにフィット)
+  const resizeViewport = () => {
+    const container = document.getElementById('planetarium-viewport')!;
+    const size = Math.min(container.clientWidth, container.clientHeight, 800);
+    
+    webglCanvas.width = size;
+    webglCanvas.height = size;
+    overlayCanvas.width = size;
+    overlayCanvas.height = size;
+    
+    renderer.setSize(size, size);
+    camera.aspect = 1;
+    camera.updateProjectionMatrix();
   };
-  window.addEventListener('resize', resizeCanvas);
-  resizeCanvas();
+
+  window.addEventListener('resize', resizeViewport);
+  resizeViewport();
+  
+  // 初期リサイズ遅延実行 (コンテナ構築待ち用)
+  setTimeout(resizeViewport, 100);
 }
 
 // ==========================================
-// アニメーションループ (Animation Loop)
+// 更新ループ
 // ==========================================
 
 function updateTime() {
   if (isTimeFlowing) {
-    const elapsedMs = 16.7 * timeSpeed; // 60fpsベースでの進行時間
+    const elapsedMs = 16.7 * timeSpeed;
     currentDate = new Date(currentDate.getTime() + elapsedMs);
     
-    // テキストインプットの表示も追従 (フォーカスされていないときのみ)
     const dateInput = document.getElementById('input-date') as HTMLInputElement;
     if (document.activeElement !== dateInput) {
       const pad = (n: number) => String(n).padStart(2, '0');
@@ -635,17 +755,15 @@ function updateTime() {
 
 function tick() {
   updateTime();
-  drawSky();
+  updatePositionsAndRender();
   requestAnimationFrame(tick);
 }
 
-// 起動開始！
+// プラネタリウムの起動
 async function start() {
-  canvas = document.getElementById('skyCanvas') as HTMLCanvasElement;
-  ctx = canvas.getContext('2d')!;
-  
+  init3D();
   initEvents();
-  await fetchStarCatalog();
+  await loadStarCatalog();
   tick();
 }
 

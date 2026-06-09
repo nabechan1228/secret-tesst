@@ -47,18 +47,40 @@
         align-items: center;
       }
 
-      canvas {
-        background: radial-gradient(circle at center, #050616 0%, #010103 100%);
-        box-shadow: 0 0 50px rgba(0, 0, 0, 0.8), 0 0 30px rgba(10, 15, 40, 0.5);
-        border-radius: 50%;
+      #planetarium-viewport {
+        position: relative;
+        width: 800px;
+        height: 800px;
         max-width: 95vmin;
         max-height: 95vmin;
         aspect-ratio: 1 / 1;
+        border-radius: 50%;
+        overflow: hidden;
+        box-shadow: 0 0 50px rgba(0, 0, 0, 0.8), 0 0 30px rgba(10, 15, 40, 0.5);
+        border: 2px solid var(--accent-blue);
+        background: radial-gradient(circle at center, #050616 0%, #010103 100%);
+      }
+
+      #webglCanvas {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
         cursor: grab;
       }
 
-      canvas:active {
+      #webglCanvas:active {
         cursor: grabbing;
+      }
+
+      #overlayCanvas {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
       }
 
       /* 半透明コントロールパネル (Glassmorphism) */
@@ -371,8 +393,11 @@
         </div>
       </div>
 
-      <!-- プラネタリウム・円形ドームCanvas -->
-      <canvas id="skyCanvas" width="800" height="800"></canvas>
+      <!-- プラネタリウム・円形ドームCanvasコンテナ -->
+      <div id="planetarium-viewport">
+        <canvas id="webglCanvas"></canvas>
+        <canvas id="overlayCanvas"></canvas>
+      </div>
 
       <!-- リアルタイム数値盤 -->
       <div class="stats-panel">
