@@ -340,6 +340,7 @@ function updatePositionsAndRender() {
     const sprite = starObjects.get(star.id);
     if (sprite) {
       sprite.position.copy(pos3d);
+      sprite.visible = hor.alt >= 0;
 
       // 瞬き効果
       const twinkle = 0.85 + 0.15 * Math.sin(now * 0.003 + star.id * 17.3);
@@ -355,6 +356,9 @@ function updatePositionsAndRender() {
     constellationLinesData.forEach((constData) => {
       constData.segments.forEach((seg) => {
         if (idx + 6 > constellationPositions.length) return;
+
+        // 地平線より下にあるセグメントは描画しない
+        if (seg.alt1 < 0 || seg.alt2 < 0) return;
 
         // セグメントの両端を3D座標に変換
         // APIは毎フレームの計算ではなく初回のAlt/Azを返すので、
@@ -404,7 +408,7 @@ function updatePositionsAndRender() {
       if (star.mag > 2.2) return; // 2等星以上のみ名前表示
 
       const hor = equatorialToHorizontal(star.ra, star.dec, lst, latitude);
-      if (hor.alt < -5) return;
+      if (hor.alt < 0) return;
 
       const pos3d = horizonToCartesian(hor.az, hor.alt, DOME_RADIUS);
       const scr = getScreenPosition(pos3d);

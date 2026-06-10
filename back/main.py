@@ -190,6 +190,11 @@ def get_sky(
             ra1, dec1, ra2, dec2 = seg
             p1 = equatorial_to_horizontal(ra1, dec1, lst, lat)
             p2 = equatorial_to_horizontal(ra2, dec2, lst, lat)
+            
+            # 両端の点がともに地平線の下に深く沈んでいる（-15度以下）場合は除外
+            if p1["alt"] < -15.0 and p2["alt"] < -15.0:
+                continue
+                
             converted_segments.append({
                 "az1": round(p1["az"], 3), "alt1": round(p1["alt"], 3),
                 "az2": round(p2["az"], 3), "alt2": round(p2["alt"], 3),
