@@ -36,6 +36,29 @@ interface ConstellationMeta {
   rank: number;
 }
 
+interface PlanetData {
+  name: string;
+  name_ja: string;
+  ra: number;
+  dec: number;
+  az: number;
+  alt: number;
+  color: string;
+  mag: number;
+  dist_au: number;
+}
+
+interface DSOData {
+  id: string;
+  name_ja: string;
+  name_en: string;
+  type: string;
+  size: number;
+  mag: number;
+  az: number;
+  alt: number;
+}
+
 // ==========================================
 // グローバル状態
 // ==========================================
@@ -56,8 +79,9 @@ let baseFov = 60;
 
 // 描画設定
 let showConstellations = true;
-let showAsterisms = false;
 let showStarNames = true;
+let showPlanets = true;
+let showDSO = true;
 
 // マウスインタラクション
 let isDragging = false;
@@ -83,6 +107,12 @@ let constellationMesh: THREE.LineSegments;
 let starsData: StarData[] = [];
 let constellationLinesData: ConstellationLineData[] = [];
 let constellationMeta: Record<string, ConstellationMeta> = {};
+let planetsData: PlanetData[] = [];
+let dsoData: DSOData[] = [];
+
+// 惑星・DSO 更新タイマー
+let planetsDsoLastUpdate = 0;
+const PLANETS_DSO_UPDATE_INTERVAL_MS = 30000; // 30秒ごとに更新
 
 // 星座線バッファ (最大 1500セグメント × 2頂点 × 3成分)
 const MAX_CONST_SEGMENTS = 1500;
@@ -260,9 +290,12 @@ async function loadFromAPI(): Promise<void> {
 
     starsData = skyData.stars;
     constellationLinesData = skyData.constellation_lines;
+    planetsData = skyData.planets || [];
+    dsoData = skyData.deep_sky_objects || [];
+    planetsDsoLastUpdate = Date.now();
 
-    if (statusEl) statusEl.textContent = `${starsData.length}星ロード完了`;
-    console.log(`✓ API loaded: ${starsData.length} stars, ${constellationLinesData.length} constellations`);
+    if (statusEl) statusEl.textContent = `${starsData.length}星 / 惑星${planetsData.length} / DSO${dsoData.length}天体`;
+    console.log(`✓ API loaded: ${starsData.length} stars, ${constellationLinesData.length} constellations, ${planetsData.length} planets, ${dsoData.length} DSOs`);
 
     // 星スプライトを構築
     buildStarSprites();
@@ -300,6 +333,129 @@ function buildStarSprites() {
   });
 
   console.log(`Built ${starObjects.size} star sprites`);
+}
+
+// ==========================================
+// 光害グラデーションドーム
+// ==========================================
+
+/**
+ * 地平線付近に半透明のグラデーションを重ねて光害（街明かり・大気の厚み）を表現する。
+ * - 地平線スクリーン位置を 8方位でサンプリングし、画面下部の帯全体をカバー
+ * - Layer 1: 街明かり（橙〜黄）… 高度 0〜5° 相当
+ * - Layer 2: 大気散乱（青白）… 高度 0〜15° 相当
+ * - Layer 3: 薄明かり（藍〜紺）… 高度 0〜25° 相当
+ */
+function drawLightPollution(w: number, h: number, lst: number) {
+  // ★太陽の高度を考慮して、昼間（薄明含む）は街明かりをフェードアウト
+  const sun = planetsData.find(p => p.name === 'Sun');
+  let sunAlt = -20;
+  if (sun) {
+    const hor = equatorialToHorizontal(sun.ra, sun.dec, lst, latitude);
+    sunAlt = hor.alt;
+  }
+  let sunFade = 1.0;
+  if (sunAlt > -8) {
+    sunFade = Math.max(0.0, 1.0 - (sunAlt + 8) / 8.0);
+  }
+  if (sunFade <= 0.01) return;
+
+  // 地平線上の8方位をスクリーン座標に変換
+  const horizonAzimuths = [0, 45, 90, 135, 180, 225, 270, 315];
+  const horizonScreenY: number[] = [];
+
+  for (const az of horizonAzimuths) {
+    const pos3d = horizonToCartesian(az, 0.01, DOME_RADIUS);
+    const scr = getScreenPosition(pos3d);
+    if (scr.visible) horizonScreenY.push(scr.y);
+  }
+
+  // ★修正: 地平線が一点も画面内に見えないなら描画しない（視点が上を向いているとき）
+  if (horizonScreenY.length === 0) return;
+
+  // 地平線のY座標（スクリーン上で最も下に見える位置）
+  const baseY = Math.max(...horizonScreenY);
+
+  // 地平線が画面下端より下（見切れている）なら描画しない
+  if (baseY >= h) return;
+
+  // ★フェードアウト: 地平線が画面下80%より下に来たら徐々に透明化
+  // こうすることで地平線がギリギリ見えている段階でも自然に消える
+  const fadeThreshold = h * 0.80;
+  const fadeAlpha = baseY < fadeThreshold
+    ? 1.0
+    : 1.0 - (baseY - fadeThreshold) / (h - fadeThreshold);
+
+  if (fadeAlpha <= 0.01) return;
+
+  // 高度 20°相当のスクリーン位置（グラデーション高さの基準）
+  // visible でない場合は baseY から画面の1/4上を推定
+  const pos20 = horizonToCartesian(viewAzimuth, 20, DOME_RADIUS);
+  const scr20 = getScreenPosition(pos20);
+  const alt20Y = scr20.visible ? scr20.y : baseY - Math.min(gradEstimate(h), baseY - 20);
+
+  // グラデーションの高さ（最低80px確保）
+  const gradHeight = Math.max(80, baseY - alt20Y);
+
+  // 全レイヤーに fadeAlpha と sunFade を乗算して自然なフェードを実現
+  ctx2d.save();
+  ctx2d.globalAlpha = fadeAlpha * sunFade;
+
+  // ─── 統合グラデーション: 地平線（最明）→ 天頂方向（透明）
+  // colorStop 0.0 = baseY（地平線、最も明るい）
+  // colorStop 1.0 = baseY - gradHeight（天頂方向、透明）
+  // こうすることで「下ほど明るく、上に行くほど暗く消える」が保証される
+  {
+    const grad = ctx2d.createLinearGradient(0, baseY, 0, baseY - gradHeight);
+    // 地平線直上: 街明かり（LED光）の散乱による、ほんのり白み・青みがかった明るい夜空
+    grad.addColorStop(0.00, 'rgba(180, 200, 230, 0.28)');
+    // 少し上: 白い明かりから夜空の青へとスムーズに遷移
+    grad.addColorStop(0.15, 'rgba(130, 160, 195, 0.18)');
+    // 中間: 夜空の深い青へ
+    grad.addColorStop(0.35, 'rgba( 80, 110, 160, 0.12)');
+    // さらに上: 藍色の薄明かり
+    grad.addColorStop(0.60, 'rgba( 40,  60, 120, 0.06)');
+    // 上端: ほぼ透明
+    grad.addColorStop(0.85, 'rgba( 15,  25,  70, 0.02)');
+    grad.addColorStop(1.00, 'rgba(  5,  10,  40, 0.00)');
+    ctx2d.fillStyle = grad;
+    // 地平線から下（地面）も含めて塗る（地面エリアは colorStop 0.0 でクランプ）
+    ctx2d.fillRect(0, baseY - gradHeight, w, gradHeight + (h - baseY) + 10);
+  }
+
+  // ─── 都市ハロー: 地平線中央に広がる淡い青白の街明かり（ラジアル）
+  // ハローは地平線付近のみ（gradHeight の半分以内）に限定し、上には広げない
+  {
+    const cx = w * 0.5;
+    const cy = baseY + 20;
+    const rx = w * 0.55;
+    const ry = gradHeight * 0.40; // 高さをコンパクトに
+
+    ctx2d.save();
+    ctx2d.scale(1.0, ry / rx);
+    const haloGrad = ctx2d.createRadialGradient(
+      cx, cy * (rx / ry), 0,
+      cx, cy * (rx / ry), rx
+    );
+    // 都市ハローも橙ではなく、LED照明をイメージした淡い青白へ変更
+    haloGrad.addColorStop(0.0,  'rgba(215, 230, 255, 0.10)'); // 中心: 淡い青白
+    haloGrad.addColorStop(0.35, 'rgba(170, 195, 235, 0.05)');
+    haloGrad.addColorStop(0.70, 'rgba(120, 150, 200, 0.02)');
+    haloGrad.addColorStop(1.0,  'rgba(80,  110, 160, 0.00)');
+    ctx2d.fillStyle = haloGrad;
+    ctx2d.fillRect(0, (cy - ry) * (rx / ry), w, ry * 2.5 * (rx / ry));
+    ctx2d.restore();
+  }
+
+  ctx2d.restore();
+}
+
+// gradHeight 推定用ヘルパー（alt20Y が画面外の場合のフォールバック計算）
+function gradEstimate(h: number): number {
+  // FOVから高度20°相当の画面ピクセル数を推定
+  if (!camera) return h * 0.25;
+  const pixPerDeg = h / camera.fov;
+  return pixPerDeg * 20;
 }
 
 // ==========================================
@@ -399,6 +555,9 @@ function updatePositionsAndRender() {
   // 5. 2Dオーバーレイ描画
   ctx2d.clearRect(0, 0, w, h);
 
+  // 光害グラデーションドーム (地平線付近の大気・街明かり表現)
+  drawLightPollution(w, h, lst);
+
   // 明るい星の名前を表示 (API呼び出し時に取得したデータに名前がないため、HIP番号から判定)
   if (showStarNames) {
     ctx2d.font = "11px 'Outfit', sans-serif";
@@ -442,6 +601,16 @@ function updatePositionsAndRender() {
       ctx2d.fillText(dir.name, scr.x, scr.y);
     }
   });
+
+  // 6. 惑星描画
+  if (showPlanets && planetsData.length > 0) {
+    drawPlanets(lst);
+  }
+
+  // 7. DSO描画
+  if (showDSO && dsoData.length > 0) {
+    drawDSO();
+  }
 }
 
 // HIP番号 → 星の日本語名 (主要な明るい星のみ)
@@ -457,6 +626,175 @@ const BRIGHT_STAR_NAMES: Record<number, string> = {
   27366: 'サイフ', 26727: 'アルニタク', 26311: 'アルニラム',
   25930: 'ミンタカ', 9884: 'アケルナル',
 };
+
+// ==========================================
+// 惑星描画
+// ==========================================
+
+function drawPlanets(lst: number) {
+  planetsData.forEach((planet) => {
+    // リアルタイムでクライアント側の地平座標を再計算
+    const hor = equatorialToHorizontal(planet.ra, planet.dec, lst, latitude);
+    if (hor.alt < 0) return; // 地平線下は描画しない
+
+    const pos3d = horizonToCartesian(hor.az, hor.alt, DOME_RADIUS);
+    const scr = getScreenPosition(pos3d);
+    if (!scr.visible) return;
+
+    // 惑星のサイズ（等級に応じて）
+    const baseSize = Math.max(6, (1.0 - planet.mag) * 4 + 10);
+
+    // 色をパース
+    const r = parseInt(planet.color.slice(1, 3), 16);
+    const g = parseInt(planet.color.slice(3, 5), 16);
+    const b = parseInt(planet.color.slice(5, 7), 16);
+
+    // 光芒グラデーション（大きめのハロー）
+    const haloRadius = baseSize * 3.5;
+    const haloGrad = ctx2d.createRadialGradient(scr.x, scr.y, 0, scr.x, scr.y, haloRadius);
+    haloGrad.addColorStop(0.0,  `rgba(255, 255, 255, 0.95)`);
+    haloGrad.addColorStop(0.1,  `rgba(${r}, ${g}, ${b}, 0.9)`);
+    haloGrad.addColorStop(0.35, `rgba(${r}, ${g}, ${b}, 0.45)`);
+    haloGrad.addColorStop(0.70, `rgba(${r}, ${g}, ${b}, 0.12)`);
+    haloGrad.addColorStop(1.0,  `rgba(0, 0, 0, 0)`);
+
+    ctx2d.beginPath();
+    ctx2d.arc(scr.x, scr.y, haloRadius, 0, Math.PI * 2);
+    ctx2d.fillStyle = haloGrad;
+    ctx2d.fill();
+
+    // 惑星本体（円）
+    const diskGrad = ctx2d.createRadialGradient(scr.x - baseSize * 0.2, scr.y - baseSize * 0.2, 0, scr.x, scr.y, baseSize);
+    diskGrad.addColorStop(0, `rgba(255, 255, 255, 1.0)`);
+    diskGrad.addColorStop(0.4, `rgba(${r}, ${g}, ${b}, 1.0)`);
+    diskGrad.addColorStop(1.0, `rgba(${Math.floor(r*0.6)}, ${Math.floor(g*0.6)}, ${Math.floor(b*0.6)}, 0.8)`);
+    ctx2d.beginPath();
+    ctx2d.arc(scr.x, scr.y, baseSize, 0, Math.PI * 2);
+    ctx2d.fillStyle = diskGrad;
+    ctx2d.fill();
+
+    // 名前ラベル
+    const labelOffset = baseSize * 3 + 8;
+    ctx2d.textAlign = 'left';
+    ctx2d.textBaseline = 'middle';
+    ctx2d.font = `bold 12px 'Outfit', sans-serif`;
+    ctx2d.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx2d.fillText(planet.name_ja, scr.x + labelOffset + 1, scr.y + 1);
+    ctx2d.fillStyle = `rgba(${r + 60 > 255 ? 255 : r + 60}, ${g + 40 > 255 ? 255 : g + 40}, ${b + 20 > 255 ? 255 : b + 20}, 0.95)`;
+    ctx2d.fillText(planet.name_ja, scr.x + labelOffset, scr.y);
+  });
+}
+
+// ==========================================
+// DSO（深宇宙天体）描画
+// ==========================================
+
+function drawDSO() {
+  dsoData.forEach((obj) => {
+    if (obj.alt < 0) return; // 地平線下は描画しない
+
+    const pos3d = horizonToCartesian(obj.az, obj.alt, DOME_RADIUS);
+    const scr = getScreenPosition(pos3d);
+    if (!scr.visible) return;
+
+    // 視直径をスクリーン半径に変換
+    // FOVとcanvasサイズから 1分角あたりのピクセル数を計算
+    const fovDeg = camera.fov;
+    const pixPerDeg = overlayCanvas.height / fovDeg;
+    const pixPerArcmin = pixPerDeg / 60.0;
+    const screenRadius = Math.max(5, (obj.size / 2) * pixPerArcmin);
+
+    ctx2d.save();
+    ctx2d.textAlign = 'left';
+    ctx2d.textBaseline = 'middle';
+
+    if (obj.type === 'galaxy') {
+      // 銀河: 傾いた楕円 + グラデーション
+      const rx = screenRadius;
+      const ry = screenRadius * 0.45;
+      const angle = Math.PI / 5; // 約36度傾き
+
+      // 内側グラデーション
+      const grd = ctx2d.createRadialGradient(scr.x, scr.y, 0, scr.x, scr.y, rx);
+      grd.addColorStop(0,   'rgba(255, 240, 200, 0.25)');
+      grd.addColorStop(0.5, 'rgba(255, 220, 150, 0.12)');
+      grd.addColorStop(1,   'rgba(200, 160, 80, 0)');
+
+      ctx2d.translate(scr.x, scr.y);
+      ctx2d.rotate(angle);
+      ctx2d.scale(1, ry / rx);
+      ctx2d.beginPath();
+      ctx2d.arc(0, 0, rx, 0, Math.PI * 2);
+      ctx2d.fillStyle = grd;
+      ctx2d.fill();
+
+      // 楕円アウトライン（点線）
+      ctx2d.setLineDash([3, 4]);
+      ctx2d.strokeStyle = 'rgba(255, 220, 130, 0.6)';
+      ctx2d.lineWidth = 1;
+      ctx2d.stroke();
+      ctx2d.setLineDash([]);
+      ctx2d.restore();
+
+      // 名前ラベル（restore後）
+      ctx2d.textAlign = 'left';
+      ctx2d.textBaseline = 'middle';
+      ctx2d.font = `10px 'Outfit', sans-serif`;
+      ctx2d.fillStyle = 'rgba(255, 220, 130, 0.85)';
+      ctx2d.fillText(`${obj.id} ${obj.name_ja}`, scr.x + screenRadius + 4, scr.y);
+
+    } else if (obj.type === 'nebula' || obj.type === 'supernova_remnant') {
+      // 星雲: 点線の丸 + 中心グラデーション
+      const grd = ctx2d.createRadialGradient(scr.x, scr.y, 0, scr.x, scr.y, screenRadius);
+      grd.addColorStop(0,   'rgba(100, 200, 255, 0.2)');
+      grd.addColorStop(0.6, 'rgba(80, 160, 255, 0.08)');
+      grd.addColorStop(1,   'rgba(60, 120, 220, 0)');
+
+      ctx2d.beginPath();
+      ctx2d.arc(scr.x, scr.y, screenRadius, 0, Math.PI * 2);
+      ctx2d.fillStyle = grd;
+      ctx2d.fill();
+
+      // 点線丸アウトライン
+      ctx2d.setLineDash([3, 3]);
+      ctx2d.strokeStyle = 'rgba(100, 200, 255, 0.7)';
+      ctx2d.lineWidth = 1.2;
+      ctx2d.beginPath();
+      ctx2d.arc(scr.x, scr.y, screenRadius, 0, Math.PI * 2);
+      ctx2d.stroke();
+      ctx2d.setLineDash([]);
+      ctx2d.restore();
+
+      ctx2d.textAlign = 'left';
+      ctx2d.textBaseline = 'middle';
+      ctx2d.font = `10px 'Outfit', sans-serif`;
+      ctx2d.fillStyle = 'rgba(120, 210, 255, 0.85)';
+      ctx2d.fillText(`${obj.id} ${obj.name_ja}`, scr.x + screenRadius + 4, scr.y);
+
+    } else {
+      // 星団 (cluster / open_cluster): 点線の丸（破線間隔違い）
+      ctx2d.beginPath();
+      ctx2d.arc(scr.x, scr.y, screenRadius, 0, Math.PI * 2);
+      ctx2d.fillStyle = 'rgba(180, 255, 180, 0.06)';
+      ctx2d.fill();
+
+      ctx2d.setLineDash([2, 5]);
+      ctx2d.strokeStyle = 'rgba(160, 255, 160, 0.65)';
+      ctx2d.lineWidth = 1;
+      ctx2d.beginPath();
+      ctx2d.arc(scr.x, scr.y, screenRadius, 0, Math.PI * 2);
+      ctx2d.stroke();
+      ctx2d.setLineDash([]);
+      ctx2d.restore();
+
+      ctx2d.textAlign = 'left';
+      ctx2d.textBaseline = 'middle';
+      ctx2d.font = `10px 'Outfit', sans-serif`;
+      ctx2d.fillStyle = 'rgba(160, 255, 160, 0.85)';
+      ctx2d.fillText(`${obj.id} ${obj.name_ja}`, scr.x + screenRadius + 4, scr.y);
+    }
+  });
+}
 
 // ==========================================
 // 星座情報パネル
@@ -553,6 +891,12 @@ function initEvents() {
 
   constellationCheckbox.addEventListener('change', () => { showConstellations = constellationCheckbox.checked; });
   starNamesCheckbox.addEventListener('change', () => { showStarNames = starNamesCheckbox.checked; });
+
+  // 惑星・DSOトグル
+  const planetsCheckbox = document.getElementById('toggle-planets') as HTMLInputElement;
+  const dsoCheckbox = document.getElementById('toggle-dso') as HTMLInputElement;
+  if (planetsCheckbox) planetsCheckbox.addEventListener('change', () => { showPlanets = planetsCheckbox.checked; });
+  if (dsoCheckbox) dsoCheckbox.addEventListener('change', () => { showDSO = dsoCheckbox.checked; });
 
   // 星座選択ドロップダウン
   const constSelect = document.getElementById('constellation-select') as HTMLSelectElement;
@@ -686,8 +1030,31 @@ function updateTime() {
   }
 }
 
+async function refreshPlanetsAndDSO() {
+  try {
+    const skyRes = await fetch(
+      `http://localhost:8000/api/sky?lat=${latitude}&lng=${longitude}&mag_limit=6.0`
+    );
+    if (!skyRes.ok) return;
+    const skyData = await skyRes.json();
+    planetsData = skyData.planets || [];
+    dsoData = skyData.deep_sky_objects || [];
+    starsData = skyData.stars;
+    constellationLinesData = skyData.constellation_lines;
+    planetsDsoLastUpdate = Date.now();
+  } catch (_) {
+    // サイレントに失敗（描画は前回データで継続）
+  }
+}
+
 function tick() {
   updateTime();
+
+  // 惑星・DSOを30秒ごとにAPIから更新
+  if (Date.now() - planetsDsoLastUpdate > PLANETS_DSO_UPDATE_INTERVAL_MS) {
+    refreshPlanetsAndDSO();
+  }
+
   updatePositionsAndRender();
   requestAnimationFrame(tick);
 }
@@ -703,7 +1070,7 @@ async function start() {
   if (Object.keys(constellationMeta).length > 0) {
     populateConstellationSelect();
   }
-  showToast(`Stellaris 起動完了 - ${starsData.length}星 / 88星座`, 'info');
+  showToast(`Stellaris 起動完了 - ${starsData.length}星 / 88星座 / 惑星${planetsData.length}`, 'info');
   tick();
 }
 

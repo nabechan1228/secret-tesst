@@ -13,6 +13,8 @@ from fastapi.responses import JSONResponse
 from typing import Dict, Any, List, Optional
 
 from astro_loader import get_stars, get_constellation_lines, get_constellation_meta, get_constellation_bounds
+from planet_calc import get_planet_positions
+from dso_data import MESSIER_OBJECTS
 
 app = FastAPI(
     title="Stellaris Planetarium API",
@@ -201,12 +203,41 @@ def get_sky(
             })
         constellation_lines_out.append({"cid": cid, "segments": converted_segments})
     
+    # --- 惑星位置計算 ---
+    planets_out = get_planet_positions(
+        jd=jd,
+        lat=lat,
+        lng=lng,
+        equatorial_to_horizontal_fn=equatorial_to_horizontal,
+        lst_deg=lst,
+    )
+
+    # --- 深宇宙天体 (DSO) の地平座標計算 ---
+    dso_out = []
+    for obj in MESSIER_OBJECTS:
+        pos = equatorial_to_horizontal(obj["ra"], obj["dec"], lst, lat)
+        # 地平線より大きく下にある天体は除外 (-15度以下)
+        if pos["alt"] < -15.0:
+            continue
+        dso_out.append({
+            "id":      obj["id"],
+            "name_ja": obj["name_ja"],
+            "name_en": obj["name_en"],
+            "type":    obj["type"],
+            "size":    obj["size"],
+            "mag":     obj["mag"],
+            "az":      round(pos["az"],  3),
+            "alt":     round(pos["alt"], 3),
+        })
+
     return {
         "datetime": dt_utc.isoformat(),
         "julian_date": round(jd, 6),
         "lst_deg": round(lst, 4),
         "stars": visible_stars,
         "constellation_lines": constellation_lines_out,
+        "planets": planets_out,
+        "deep_sky_objects": dso_out,
     }
 
 
