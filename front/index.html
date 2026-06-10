@@ -4,415 +4,552 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Stellaris - Professional Interactive Planetarium</title>
+    <meta name="description" content="5044星・88星座のリアルタイム3Dプラネタリウム。精密な天体計算でいつでもどこでも夜空を再現。">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Noto+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Noto+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
     <style>
       :root {
-        --bg-grad-start: #020208;
-        --bg-grad-end: #07091e;
-        --panel-bg: rgba(8, 10, 24, 0.65);
-        --panel-border: rgba(100, 180, 255, 0.15);
-        --text-primary: #f0f4ff;
-        --text-secondary: #8da2cf;
-        --accent-blue: #00bcd4;
-        --accent-glow: rgba(0, 188, 212, 0.4);
+        --bg-start: #010108;
+        --bg-end: #06091c;
+        --panel-bg: rgba(6, 9, 28, 0.72);
+        --panel-border: rgba(80, 160, 255, 0.18);
+        --panel-border-hover: rgba(0, 188, 212, 0.5);
+        --text-primary: #eef2ff;
+        --text-secondary: #7a96cc;
+        --text-muted: #435580;
+        --accent: #00bcd4;
+        --accent-glow: rgba(0, 188, 212, 0.35);
+        --accent-dim: rgba(0, 188, 212, 0.15);
+        --gold: #ffc947;
+        --gold-glow: rgba(255, 201, 71, 0.3);
+        --danger: #ff4757;
+        --success: #2ed573;
+        --panel-radius: 18px;
+        --panel-shadow: 0 20px 50px rgba(0,0,0,0.6), 0 0 0 1px var(--panel-border);
       }
 
-      * {
-        box-sizing: border-box;
-        margin: 0;
-        padding: 0;
-      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
 
-      body {
+      html, body {
         font-family: 'Outfit', 'Noto Sans JP', sans-serif;
-        background: radial-gradient(circle at center, var(--bg-grad-end) 0%, var(--bg-grad-start) 100%);
+        background: radial-gradient(ellipse at 30% 40%, #0c1340 0%, var(--bg-start) 70%);
         color: var(--text-primary);
-        height: 100vh;
+        height: 100%;
         overflow: hidden;
-        display: flex;
-        justify-content: center;
-        align-items: center;
         user-select: none;
       }
 
-      /* メインの描画コンテナ */
+      /* ============ レイアウト ============ */
       #app-container {
         position: relative;
         width: 100vw;
         height: 100vh;
         display: flex;
-        justify-content: center;
-        align-items: center;
+        align-items: stretch;
       }
 
+      /* 左サイドバー */
+      #sidebar {
+        position: relative;
+        width: 300px;
+        min-width: 300px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 16px 14px;
+        background: rgba(4, 6, 20, 0.85);
+        border-right: 1px solid var(--panel-border);
+        backdrop-filter: blur(20px);
+        z-index: 10;
+        overflow-y: auto;
+        overflow-x: hidden;
+      }
+
+      #sidebar::-webkit-scrollbar { width: 4px; }
+      #sidebar::-webkit-scrollbar-thumb { background: var(--panel-border); border-radius: 2px; }
+
+      /* プラネタリウムビューポート */
       #planetarium-viewport {
         position: relative;
-        width: 800px;
-        height: 800px;
-        max-width: 95vmin;
-        max-height: 95vmin;
-        aspect-ratio: 1 / 1;
-        border-radius: 50%;
+        flex: 1;
         overflow: hidden;
-        box-shadow: 0 0 50px rgba(0, 0, 0, 0.8), 0 0 30px rgba(10, 15, 40, 0.5);
-        border: 2px solid var(--accent-blue);
         background: radial-gradient(circle at center, #050616 0%, #010103 100%);
       }
 
       #webglCanvas {
         position: absolute;
-        left: 0;
-        top: 0;
-        width: 100%;
-        height: 100%;
+        left: 0; top: 0;
+        width: 100%; height: 100%;
         cursor: grab;
       }
-
-      #webglCanvas:active {
-        cursor: grabbing;
-      }
-
+      #webglCanvas:active { cursor: grabbing; }
       #overlayCanvas {
         position: absolute;
-        left: 0;
-        top: 0;
-        width: 100%;
-        height: 100%;
+        left: 0; top: 0;
+        width: 100%; height: 100%;
         pointer-events: none;
       }
 
-      /* 半透明コントロールパネル (Glassmorphism) */
-      .control-panel {
-        position: absolute;
-        top: 20px;
-        left: 20px;
-        width: 320px;
+      /* ============ パネル共通 ============ */
+      .panel {
         background: var(--panel-bg);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
         border: 1px solid var(--panel-border);
-        border-radius: 16px;
-        padding: 24px;
-        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
-        z-index: 10;
-        display: flex;
-        flex-direction: column;
-        gap: 20px;
-        transition: opacity 0.3s;
+        border-radius: var(--panel-radius);
+        padding: 18px;
+        box-shadow: var(--panel-shadow);
       }
 
-      h1 {
-        font-size: 1.5rem;
-        font-weight: 600;
+      .panel-title {
+        font-size: 0.72rem;
+        text-transform: uppercase;
         letter-spacing: 2px;
-        color: #ffffff;
-        background: linear-gradient(135deg, #fff 0%, var(--text-secondary) 100%);
+        color: var(--accent);
+        margin-bottom: 14px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .panel-title::before {
+        content: '';
+        width: 3px;
+        height: 12px;
+        background: var(--accent);
+        border-radius: 2px;
+        box-shadow: 0 0 6px var(--accent-glow);
+      }
+
+      /* ============ ロゴ ============ */
+      #logo-section {
+        padding: 10px 4px 6px;
+        border-bottom: 1px solid var(--panel-border);
+      }
+
+      #logo-section h1 {
+        font-size: 1.6rem;
+        font-weight: 700;
+        letter-spacing: 4px;
+        background: linear-gradient(135deg, #fff 0%, #9bb0ff 50%, var(--accent) 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        border-bottom: 1px solid var(--panel-border);
-        padding-bottom: 10px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
       }
 
-      h1 span {
-        font-size: 0.8rem;
-        font-weight: 300;
-        letter-spacing: 1px;
-        color: var(--accent-blue);
-        text-shadow: 0 0 8px var(--accent-glow);
-      }
-
-      .section-title {
-        font-size: 0.85rem;
-        text-transform: uppercase;
+      #logo-section p {
+        font-size: 0.72rem;
+        color: var(--text-muted);
         letter-spacing: 1.5px;
-        color: var(--text-secondary);
-        margin-bottom: 8px;
-        font-weight: 600;
+        margin-top: 3px;
       }
 
+      #loading-status {
+        font-size: 0.72rem;
+        color: var(--gold);
+        margin-top: 6px;
+        min-height: 16px;
+      }
+
+      /* ============ コントロール要素 ============ */
       .control-group {
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: 10px;
       }
 
       .control-row {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        gap: 10px;
+        gap: 8px;
       }
 
       label {
-        font-size: 0.85rem;
+        font-size: 0.82rem;
         color: var(--text-secondary);
+        flex-shrink: 0;
       }
 
-      input[type="text"], input[type="number"], select {
-        background: rgba(255, 255, 255, 0.05);
+      input[type="text"],
+      input[type="number"],
+      select {
+        background: rgba(255,255,255,0.05);
         border: 1px solid var(--panel-border);
-        border-radius: 6px;
+        border-radius: 8px;
         color: var(--text-primary);
         padding: 6px 10px;
         font-family: inherit;
-        font-size: 0.85rem;
+        font-size: 0.82rem;
         outline: none;
-        transition: border-color 0.2s;
-        width: 100px;
-        text-align: right;
+        transition: border-color 0.2s, box-shadow 0.2s;
+        min-width: 0;
       }
 
-      input[type="text"]:focus, input[type="number"]:focus, select:focus {
-        border-color: var(--accent-blue);
+      input[type="text"]:focus,
+      input[type="number"]:focus,
+      select:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px var(--accent-dim);
       }
 
-      select {
-        text-align: left;
-        width: 100%;
-      }
+      input[type="number"] { width: 90px; text-align: right; }
+      input[type="text"] { width: 150px; }
+      select { width: 100%; }
 
-      /* スライダーデザイン */
+      /* スライダー */
       input[type="range"] {
         -webkit-appearance: none;
         width: 100%;
         height: 4px;
-        background: rgba(255, 255, 255, 0.1);
+        background: rgba(255,255,255,0.1);
         border-radius: 2px;
         outline: none;
       }
-
       input[type="range"]::-webkit-slider-thumb {
         -webkit-appearance: none;
-        width: 16px;
-        height: 16px;
+        width: 14px; height: 14px;
         border-radius: 50%;
-        background: var(--accent-blue);
-        box-shadow: 0 0 10px var(--accent-glow);
+        background: var(--accent);
+        box-shadow: 0 0 8px var(--accent-glow);
         cursor: pointer;
         transition: transform 0.1s;
       }
+      input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.3); }
 
-      input[type="range"]::-webkit-slider-thumb:hover {
-        transform: scale(1.2);
-      }
-
-      /* スイッチデザイン */
+      /* トグルスイッチ */
       .switch {
         position: relative;
         display: inline-block;
-        width: 44px;
-        height: 22px;
+        width: 40px; height: 20px;
+        flex-shrink: 0;
       }
-
-      .switch input {
-        opacity: 0;
-        width: 0;
-        height: 0;
-      }
-
+      .switch input { opacity: 0; width: 0; height: 0; }
       .slider {
         position: absolute;
         cursor: pointer;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background-color: rgba(255, 255, 255, 0.1);
-        transition: .4s;
-        border-radius: 22px;
+        inset: 0;
+        background: rgba(255,255,255,0.08);
         border: 1px solid var(--panel-border);
+        border-radius: 20px;
+        transition: 0.3s;
       }
-
       .slider:before {
-        position: absolute;
         content: "";
-        height: 14px;
-        width: 14px;
-        left: 3px;
-        bottom: 3px;
-        background-color: #fff;
-        transition: .4s;
-        border-radius: 50%;
-      }
-
-      input:checked + .slider {
-        background-color: var(--accent-blue);
-        box-shadow: 0 0 10px var(--accent-glow);
-      }
-
-      input:checked + .slider:before {
-        transform: translateX(22px);
-      }
-
-      /* 座標表示盤 */
-      .stats-panel {
         position: absolute;
-        bottom: 20px;
-        left: 20px;
+        width: 12px; height: 12px;
+        left: 3px; bottom: 3px;
+        background: #fff;
+        border-radius: 50%;
+        transition: 0.3s;
+      }
+      input:checked + .slider {
+        background: var(--accent);
+        box-shadow: 0 0 8px var(--accent-glow);
+        border-color: var(--accent);
+      }
+      input:checked + .slider:before { transform: translateX(20px); }
+
+      /* ============ 統計パネル (右下) ============ */
+      #stats-panel {
+        position: absolute;
+        bottom: 16px;
+        right: 16px;
         background: var(--panel-bg);
         backdrop-filter: blur(12px);
         border: 1px solid var(--panel-border);
         border-radius: 12px;
-        padding: 16px 20px;
-        font-family: monospace;
-        font-size: 0.8rem;
+        padding: 14px 18px;
+        font-family: 'Courier New', monospace;
+        font-size: 0.75rem;
         color: var(--text-secondary);
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        width: 280px;
+        z-index: 10;
         pointer-events: none;
+        min-width: 220px;
       }
 
       .stat-item {
         display: flex;
         justify-content: space-between;
+        gap: 12px;
+        padding: 2px 0;
       }
 
       .stat-val {
-        color: var(--accent-blue);
+        color: var(--accent);
+        font-weight: 600;
       }
 
-      /* 地平座標方位ラベル */
-      .nav-hint {
+      /* ============ 操作ヒント ============ */
+      #nav-hint {
         position: absolute;
-        bottom: 20px;
-        right: 20px;
-        color: var(--text-secondary);
-        font-size: 0.8rem;
+        bottom: 16px;
+        left: 16px;
+        color: var(--text-muted);
+        font-size: 0.72rem;
         background: var(--panel-bg);
-        backdrop-filter: blur(12px);
+        backdrop-filter: blur(10px);
         border: 1px solid var(--panel-border);
         border-radius: 8px;
-        padding: 8px 16px;
+        padding: 8px 14px;
+        pointer-events: none;
+        z-index: 10;
+        line-height: 1.7;
+      }
+
+      /* ============ 星座情報パネル (フローティング) ============ */
+      #constellation-info-panel {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+        width: 320px;
+        background: var(--panel-bg);
+        backdrop-filter: blur(20px);
+        border: 1px solid var(--panel-border-hover);
+        border-radius: var(--panel-radius);
+        padding: 20px;
+        box-shadow: var(--panel-shadow), 0 0 30px var(--accent-dim);
+        z-index: 20;
+        transform: translateX(120%) scale(0.95);
+        opacity: 0;
+        transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s;
         pointer-events: none;
       }
 
-      /* 操作ヒントアニメーション用 */
-      .toast {
+      #constellation-info-panel.visible {
+        transform: translateX(0) scale(1);
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      #const-name {
+        font-size: 1.1rem;
+        font-weight: 600;
+        margin-bottom: 4px;
+        line-height: 1.4;
+      }
+
+      .const-name-ja { color: var(--text-primary); }
+      .const-name-en {
+        font-size: 0.8rem;
+        color: var(--accent);
+        font-weight: 400;
+        margin-left: 4px;
+      }
+
+      #const-season {
+        font-size: 0.75rem;
+        color: var(--gold);
+        margin-bottom: 12px;
+        display: inline-block;
+        background: rgba(255, 201, 71, 0.1);
+        border: 1px solid rgba(255, 201, 71, 0.2);
+        padding: 2px 10px;
+        border-radius: 20px;
+      }
+
+      #const-desc {
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+        line-height: 1.7;
+        border-top: 1px solid var(--panel-border);
+        padding-top: 12px;
+        margin-top: 8px;
+      }
+
+      #close-const-panel {
+        position: absolute;
+        top: 12px;
+        right: 14px;
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        font-size: 1.2rem;
+        cursor: pointer;
+        line-height: 1;
+        padding: 4px;
+        transition: color 0.2s;
+      }
+      #close-const-panel:hover { color: var(--text-primary); }
+
+      /* ============ トースト ============ */
+      #toast {
         position: absolute;
         top: 20px;
-        right: 20px;
-        background: rgba(0, 0, 0, 0.8);
-        border: 1px solid var(--accent-blue);
+        left: 50%;
+        transform: translateX(-50%) translateY(-20px);
+        background: rgba(4, 8, 30, 0.9);
+        border: 1px solid var(--accent);
         color: #fff;
-        padding: 10px 20px;
-        border-radius: 8px;
-        font-size: 0.85rem;
-        box-shadow: 0 0 15px var(--accent-glow);
+        padding: 10px 22px;
+        border-radius: 24px;
+        font-size: 0.82rem;
+        box-shadow: 0 0 20px var(--accent-glow);
+        z-index: 100;
         pointer-events: none;
-        animation: fadeOut 4s forwards;
+        opacity: 0;
+        transition: opacity 0.3s, transform 0.3s;
+        white-space: nowrap;
+      }
+      #toast.visible {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+      }
+      #toast.toast-error { border-color: var(--danger); box-shadow: 0 0 20px rgba(255,71,87,0.3); }
+
+      /* ============ セクション区切り ============ */
+      hr.divider {
+        border: none;
+        border-top: 1px solid var(--panel-border);
+        margin: 4px 0;
       }
 
-      @keyframes fadeOut {
-        0% { opacity: 0; transform: translateY(-10px); }
-        10% { opacity: 1; transform: translateY(0); }
-        90% { opacity: 1; }
-        100% { opacity: 0; transform: translateY(-10px); }
+      /* ============ レスポンシブ ============ */
+      @media (max-width: 768px) {
+        #sidebar { width: 260px; min-width: 260px; }
+        #constellation-info-panel { width: 260px; }
       }
     </style>
   </head>
   <body>
     <div id="app-container">
-      <!-- すりガラス調コントロールパネル -->
-      <div class="control-panel">
-        <h1>STELLARIS <span>PLANETARIUM</span></h1>
-        
-        <!-- 観測地点プリセット -->
-        <div class="control-group">
-          <div class="section-title">Observation Site</div>
-          <div class="control-row">
-            <label for="site-preset">Preset Location</label>
-            <select id="site-preset">
-              <option value="tokyo" selected>Tokyo, JP (35.7°N)</option>
-              <option value="sydney">Sydney, AU (33.9°S)</option>
-              <option value="northpole">North Pole (90.0°N)</option>
-              <option value="equator">Equator (0.0°N)</option>
+
+      <!-- ===== 左サイドバー ===== -->
+      <div id="sidebar">
+
+        <!-- ロゴ -->
+        <div id="logo-section">
+          <h1>STELLARIS</h1>
+          <p>PROFESSIONAL INTERACTIVE PLANETARIUM</p>
+          <div id="loading-status">データ読み込み中...</div>
+        </div>
+
+        <!-- 観測地 -->
+        <div class="panel">
+          <div class="panel-title">Observation Site</div>
+          <div class="control-group">
+            <div class="control-row">
+              <label for="site-preset">プリセット</label>
+              <select id="site-preset">
+                <option value="tokyo" selected>東京 (35.7°N)</option>
+                <option value="sydney">シドニー (33.9°S)</option>
+                <option value="northpole">北極点 (90°N)</option>
+                <option value="equator">赤道 (0°)</option>
+                <option value="london">ロンドン (51.5°N)</option>
+                <option value="newyork">ニューヨーク (40.7°N)</option>
+                <option value="hawaii">ハワイ (19.9°N)</option>
+              </select>
+            </div>
+            <div class="control-row">
+              <label for="input-lat">緯度 (°)</label>
+              <input type="number" id="input-lat" step="0.1" min="-90" max="90" value="35.68">
+            </div>
+            <div class="control-row">
+              <label for="input-lng">経度 (°)</label>
+              <input type="number" id="input-lng" step="0.1" min="-180" max="180" value="139.76">
+            </div>
+          </div>
+        </div>
+
+        <!-- 時間 -->
+        <div class="panel">
+          <div class="panel-title">Time Controls</div>
+          <div class="control-group">
+            <div class="control-row">
+              <label for="input-date">日時</label>
+              <input type="text" id="input-date" placeholder="YYYY-MM-DD HH:MM:SS">
+            </div>
+            <div class="control-row">
+              <label for="toggle-time-flow">リアルタイム</label>
+              <label class="switch">
+                <input type="checkbox" id="toggle-time-flow" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="control-row">
+              <label for="time-speed">加速倍率</label>
+              <span id="speed-label" style="font-size:0.8rem;color:var(--accent);min-width:36px;text-align:right;">1x</span>
+            </div>
+            <input type="range" id="time-speed" min="1" max="2000" value="1" step="1">
+          </div>
+        </div>
+
+        <!-- 表示設定 -->
+        <div class="panel">
+          <div class="panel-title">Display Settings</div>
+          <div class="control-group">
+            <div class="control-row">
+              <label for="toggle-constellations">星座線</label>
+              <label class="switch">
+                <input type="checkbox" id="toggle-constellations" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="control-row">
+              <label for="toggle-star-names">星の名前</label>
+              <label class="switch">
+                <input type="checkbox" id="toggle-star-names" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- 星座情報 -->
+        <div class="panel">
+          <div class="panel-title">Constellation Info</div>
+          <div class="control-group">
+            <select id="constellation-select">
+              <option value="">-- 星座を選択 --</option>
             </select>
           </div>
-          <div class="control-row">
-            <label for="input-lat">Latitude (°)</label>
-            <input type="number" id="input-lat" step="0.1" min="-90" max="90" value="35.68">
-          </div>
-          <div class="control-row">
-            <label for="input-lng">Longitude (°)</label>
-            <input type="number" id="input-lng" step="0.1" min="-180" max="180" value="139.76">
-          </div>
         </div>
 
-        <!-- 時間コントロール -->
-        <div class="control-group">
-          <div class="section-title">Time Controls</div>
-          <div class="control-row">
-            <label for="input-date">Date & Time</label>
-            <input type="text" id="input-date" style="width: 170px;" placeholder="YYYY-MM-DD HH:MM:SS">
-          </div>
-          <div class="control-row">
-            <label for="toggle-time-flow">Real-time Movement</label>
-            <label class="switch">
-              <input type="checkbox" id="toggle-time-flow" checked>
-              <span class="slider"></span>
-            </label>
-          </div>
-          <div class="control-row">
-            <label for="time-speed">Time Acceleration</label>
-            <span id="speed-label" style="font-size:0.8rem;color:var(--accent-blue);">1x</span>
-          </div>
-          <input type="range" id="time-speed" min="1" max="1000" value="1" step="1">
+        <hr class="divider">
+
+        <!-- クレジット -->
+        <div style="font-size:0.68rem;color:var(--text-muted);padding:0 4px;line-height:1.8;">
+          <div>🌟 HIPparcos星表 5,044星</div>
+          <div>⭐ IAU公認 88星座</div>
+          <div>🔭 d3-celestial データ</div>
+          <div>📡 Python 精密星間計算</div>
         </div>
 
-        <!-- 描画トグル -->
-        <div class="control-group">
-          <div class="section-title">Display Settings</div>
-          <div class="control-row">
-            <label for="toggle-constellations">Constellation Lines</label>
-            <label class="switch">
-              <input type="checkbox" id="toggle-constellations" checked>
-              <span class="slider"></span>
-            </label>
-          </div>
-          <div class="control-row">
-            <label for="toggle-asterisms">Major Asterisms</label>
-            <label class="switch">
-              <input type="checkbox" id="toggle-asterisms" checked>
-              <span class="slider"></span>
-            </label>
-          </div>
-          <div class="control-row">
-            <label for="toggle-star-names">Star Names</label>
-            <label class="switch">
-              <input type="checkbox" id="toggle-star-names" checked>
-              <span class="slider"></span>
-            </label>
-          </div>
-        </div>
       </div>
 
-      <!-- プラネタリウム・円形ドームCanvasコンテナ -->
+      <!-- ===== プラネタリウム本体 ===== -->
       <div id="planetarium-viewport">
         <canvas id="webglCanvas"></canvas>
         <canvas id="overlayCanvas"></canvas>
-      </div>
 
-      <!-- リアルタイム数値盤 -->
-      <div class="stats-panel">
-        <div class="stat-item"><span>Julian Date:</span><span id="stat-jd" class="stat-val">-</span></div>
-        <div class="stat-item"><span>Local Sidereal:</span><span id="stat-lst" class="stat-val">-</span></div>
-        <div class="stat-item"><span>View Center (Az/Alt):</span><span id="stat-view" class="stat-val">0° / 90°</span></div>
-        <div class="stat-item"><span>Zoom Scale:</span><span id="stat-zoom" class="stat-val">100%</span></div>
-      </div>
+        <!-- 統計パネル -->
+        <div id="stats-panel">
+          <div class="stat-item"><span>Julian Date:</span><span id="stat-jd" class="stat-val">-</span></div>
+          <div class="stat-item"><span>Local Sidereal:</span><span id="stat-lst" class="stat-val">-</span></div>
+          <div class="stat-item"><span>View (Az/Alt):</span><span id="stat-view" class="stat-val">-</span></div>
+          <div class="stat-item"><span>Zoom:</span><span id="stat-zoom" class="stat-val">-</span></div>
+          <div class="stat-item"><span>Stars:</span><span id="stat-stars" class="stat-val">-</span></div>
+        </div>
 
-      <!-- 操作ヒント -->
-      <div class="nav-hint">Drag: Rotate Sky | Wheel: Zoom In/Out</div>
-      <div class="toast">STELLARIS API Connected successfully. Ready to explore.</div>
+        <!-- 操作ヒント -->
+        <div id="nav-hint">
+          🖱 ドラッグ: 方向回転<br>
+          🖱 ホイール: ズーム<br>
+          👆 タッチ: スワイプで回転
+        </div>
+
+        <!-- 星座情報フローティングパネル -->
+        <div id="constellation-info-panel">
+          <button id="close-const-panel">✕</button>
+          <div id="const-name">-</div>
+          <div id="const-season">-</div>
+          <div id="const-desc">-</div>
+        </div>
+
+        <!-- トースト -->
+        <div id="toast"></div>
+      </div>
     </div>
 
-    <!-- TypeScriptエントリースクリプトのロード -->
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
