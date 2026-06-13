@@ -76,7 +76,7 @@ let timeSpeed = 1;
 
 let viewAzimuth = 180;
 let viewAltitude = 45;
-let baseFov = 60;
+let baseFov = 85; // 超広角（人間の視野に近い85°）
 
 let showConstellations = true;
 let showStarNames = true;
@@ -102,7 +102,7 @@ let bloomPass: UnrealBloomPass;
 const starObjects: Map<number, THREE.Sprite> = new Map();
 let constellationMesh: THREE.LineSegments;
 let milkyWayParticles: THREE.Points;
-let horizonGrid: THREE.GridHelper;
+let mountainMesh: THREE.Group;      // 山並みシルエット
 let atmosphereRing: THREE.Mesh;
 
 let starsData: StarData[] = [];
@@ -118,6 +118,31 @@ const MAX_CONST_SEGMENTS = 1500;
 const constellationPositions = new Float32Array(MAX_CONST_SEGMENTS * 2 * 3);
 
 const DOME_RADIUS = 500;
+
+// ==========================================
+// 奥行きレイヤー定数（視差効果のため距離を分離）
+// ==========================================
+const LAYER_MILKYWAY  = 900;  // 天の川（最奥）
+const LAYER_DIM       = 650;  // 暗い星 mag 4〜6
+const LAYER_MID       = 500;  // 中間 mag 2〜4
+const LAYER_BRIGHT    = 350;  // 明るい星 mag < 2
+const LAYER_CONSTEL   = 480;  // 星座線
+
+/** 等級から配置半径を決定 */
+function starLayerRadius(mag: number): number {
+  if (mag < 2.0)  return LAYER_BRIGHT;
+  if (mag < 4.0)  return LAYER_MID;
+  return LAYER_DIM;
+}
+
+/** 等級から指数関数的サイズを計算（光の強さを体感に近い形で表現） */
+function starVisualScale(mag: number): number {
+  // 天文学的フラックス比: 5等級差 = 100倍 → 1等級差 = 2.512倍
+  // 視覚サイズは sqrt(flux) に比例 → 2.512^0.5 ≈ 1.585倍/等級
+  const flux = Math.pow(10, -0.4 * mag); // 相対フラックス
+  const baseSize = Math.pow(flux, 0.45) * 42.0; // 非線形マッピング
+  return Math.max(0.5, Math.min(28.0, baseSize));
+}
 
 // ==========================================
 // イントロアニメ状態
@@ -298,8 +323,8 @@ function buildMilkyWay() {
                              sinB * Math.cos(ngpDec)) / Math.cos(dec);
     const ra = (Math.atan2(sinRaMinusNgpRa, cosRaMinusNgpRa) + ngpRa + Math.PI * 2) % (Math.PI * 2);
 
-    // 赤道座標→3D球面座標（ドーム上に配置）
-    const r = DOME_RADIUS - 5 + Math.random() * 3;
+    // 赤道座標→3D球面座標（天の川は最遠レイヤーへ配置）
+    const r = LAYER_MILKYWAY - 8 + Math.random() * 16;
     positions[i * 3 + 0] = r * Math.cos(dec) * Math.cos(ra);
     positions[i * 3 + 1] = r * Math.sin(dec);
     positions[i * 3 + 2] = -r * Math.cos(dec) * Math.sin(ra);
@@ -332,6 +357,139 @@ function buildMilkyWay() {
 
   milkyWayParticles = new THREE.Points(geo, mat);
   scene.add(milkyWayParticles);
+}
+
+// ==========================================
+// 山並みシルエット生成（オクルージョンで3D感を強制）
+// ==========================================
+
+/**
+ * 地平線を囲む低ポリゴン山並みをプロシージャルに生成する。
+ * - 複数の sin 波を重ね合わせてフラクタル的な山稜線を作成
+ * - 完全な黒（depthWrite:true）で背景を遮蔽 → オクルージョン効果
+ * - カメラと同じ原点を向くため、視点回転に追随して「手前の山が奥の星を隠す」
+ */
+function buildMountainSilhouette(): THREE.Group {
+  const group = new THREE.Group();
+
+  const SEGMENTS  = 360;         // 水平分割数（細かいほど滑らか）
+  const BASE_R    = 220;         // 山の底辺（星空レイヤー 350〜650 より手前に置いて確実に星を隠す）
+  const MAX_H     = 50;          // 山の最大高さ（見かけの高さ比率を維持）
+  const DEPTH     = 60;          // 地面方向の厚み
+
+  // 山稜線の高さをプロシージャルに生成
+  // 複数の sin 波を重ね合わせてフラクタル的な凸凹を作る
+  const heights: number[] = [];
+  for (let i = 0; i <= SEGMENTS; i++) {
+    const t = (i / SEGMENTS) * Math.PI * 2;
+    // 周波数と振幅の異なる5つの波を重畳
+    const h =
+      Math.sin(t * 3.0 + 0.5)  * 0.35 * MAX_H +
+      Math.sin(t * 7.0 + 1.2)  * 0.25 * MAX_H +
+      Math.sin(t * 13.0 + 2.8) * 0.15 * MAX_H +
+      Math.sin(t * 23.0 + 0.9) * 0.08 * MAX_H +
+      Math.sin(t * 41.0 + 3.5) * 0.04 * MAX_H +
+      MAX_H * 0.25; // ベースライン（最低高さ）
+    heights.push(Math.max(8, h));
+  }
+
+  // ジオメトリ構築: 各セグメントを三角形2枚（クワッド）で形成
+  const positions: number[] = [];
+  const indices:   number[] = [];
+
+  for (let i = 0; i < SEGMENTS; i++) {
+    const t0 = (i / SEGMENTS) * Math.PI * 2;
+    const t1 = ((i + 1) / SEGMENTS) * Math.PI * 2;
+    const h0 = heights[i];
+    const h1 = heights[i + 1];
+
+    // 底辺（地面 y=-DEPTH）と頂点（y=高さ）の4頂点
+    const x0b = BASE_R * Math.sin(t0);
+    const z0b = -BASE_R * Math.cos(t0);
+    const x1b = BASE_R * Math.sin(t1);
+    const z1b = -BASE_R * Math.cos(t1);
+
+    const base = positions.length / 3;
+
+    // 頂点0: 左下（地面）
+    positions.push(x0b, -DEPTH, z0b);
+    // 頂点1: 右下（地面）
+    positions.push(x1b, -DEPTH, z1b);
+    // 頂点2: 左上（山頂）
+    positions.push(x0b, h0, z0b);
+    // 頂点3: 右上（山頂）
+    positions.push(x1b, h1, z1b);
+
+    // 三角形2枚でクワッドを構成（反時計回りに修正して内側からの描画を可能に）
+    indices.push(base + 0, base + 1, base + 2);
+    indices.push(base + 1, base + 3, base + 2);
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  geo.computeBoundingSphere();
+  geo.computeBoundingBox();
+
+  // 1. 完全不透明の黒ボディ（星や天の川を遮蔽するための実体）
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0x000000,
+    side: THREE.DoubleSide, // 確実に描画されるよう両面に設定
+    depthWrite: true,
+    depthTest: true,
+  });
+
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.frustumCulled = false;
+  group.add(mesh);
+
+  // 2. 山の側面ワイヤーフレーム（ローポリゴンの立体感を醸し出す）
+  const edgesGeo = new THREE.EdgesGeometry(geo, 20); // しきい値20度
+  const edgesMat = new THREE.LineBasicMaterial({
+    color: 0x0f2d6b,       // やや明るくしたディープブルー（星空に溶け込まない）
+    transparent: true,
+    opacity: 0.65,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const lines = new THREE.LineSegments(edgesGeo, edgesMat);
+  lines.frustumCulled = false;
+  group.add(lines);
+
+  // 3. 山頂の稜線（トップのアウトライン）を輝かせる（ネオンワイヤー風）
+  const ridgePositions: number[] = [];
+  for (let i = 0; i < SEGMENTS; i++) {
+    const t0 = (i / SEGMENTS) * Math.PI * 2;
+    const t1 = ((i + 1) / SEGMENTS) * Math.PI * 2;
+    const h0 = heights[i];
+    const h1 = heights[i + 1];
+
+    const x0 = BASE_R * Math.sin(t0);
+    const z0 = -BASE_R * Math.cos(t0);
+    const x1 = BASE_R * Math.sin(t1);
+    const z1 = -BASE_R * Math.cos(t1);
+
+    ridgePositions.push(x0, h0, z0);
+    ridgePositions.push(x1, h1, z1);
+  }
+
+  const ridgeGeo = new THREE.BufferGeometry();
+  ridgeGeo.setAttribute('position', new THREE.Float32BufferAttribute(ridgePositions, 3));
+  ridgeGeo.computeBoundingSphere();
+  ridgeGeo.computeBoundingBox();
+  const ridgeMat = new THREE.LineBasicMaterial({
+    color: 0x00ffcc,       // 鮮烈なネオンシアン（大気光と明確なコントラスト）
+    transparent: true,
+    opacity: 0.85,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const ridgeLines = new THREE.LineSegments(ridgeGeo, ridgeMat);
+  ridgeLines.frustumCulled = false;
+  group.add(ridgeLines);
+
+  return group;
 }
 
 // ==========================================
@@ -369,9 +527,9 @@ function init3D() {
 
   bloomPass = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
-    1.4,   // strength
-    0.4,   // radius
-    0.1    // threshold
+    1.8,   // strength（強めに）
+    0.55,  // radius
+    0.02   // threshold（暗い星は光らせない → コントラスト強調）
   );
   composer.addPass(bloomPass);
 
@@ -379,7 +537,7 @@ function init3D() {
   composer.addPass(outputPass);
 
   // ========== 地面（不透明な円盤で地平線下を隠す） ==========
-  const groundGeo = new THREE.CircleGeometry(DOME_RADIUS + 10, 128);
+  const groundGeo = new THREE.CircleGeometry(DOME_RADIUS * 2, 128);
   const groundMat = new THREE.MeshBasicMaterial({
     color: 0x010208,
     side: THREE.DoubleSide,
@@ -390,23 +548,13 @@ function init3D() {
   ground.position.y = -1.0;
   scene.add(ground);
 
-  // ========== 地平線グリッド（奥行き演出） ==========
-  horizonGrid = new THREE.GridHelper(
-    DOME_RADIUS * 2, // 全体サイズ
-    80,              // 分割数
-    0x004466,        // 中心線の色
-    0x001a2e         // グリッド線の色
-  );
-  horizonGrid.position.y = -0.5;
-  // GridHelper のマテリアルに透明度設定
-  const gridMat = horizonGrid.material as THREE.LineBasicMaterial;
-  gridMat.transparent = true;
-  gridMat.opacity = 0.55;
-  scene.add(horizonGrid);
+  // ========== 山並みシルエット（オクルージョンで3D感を強制） ==========
+  mountainMesh = buildMountainSilhouette();
+  scene.add(mountainMesh);
 
   // ========== 大気散乱リング（地平線のグロー） ==========
   // 地平線付近に浮かぶ青いグロー帯（大気散乱の表現）
-  const atmoGeo = new THREE.TorusGeometry(DOME_RADIUS, 12, 16, 200);
+  const atmoGeo = new THREE.TorusGeometry(DOME_RADIUS * 1.08, 12, 16, 200);
   const atmoMat = new THREE.MeshBasicMaterial({
     color: 0x0077aa,
     transparent: true,
@@ -421,7 +569,7 @@ function init3D() {
   scene.add(atmosphereRing);
 
   // 内側のより明るいグロー帯
-  const innerAtmoGeo = new THREE.TorusGeometry(DOME_RADIUS, 5, 8, 200);
+  const innerAtmoGeo = new THREE.TorusGeometry(DOME_RADIUS * 1.05, 5, 8, 200);
   const innerAtmoMat = new THREE.MeshBasicMaterial({
     color: 0x00aacc,
     transparent: true,
@@ -521,11 +669,8 @@ function buildStarSprites() {
 
     const sprite = new THREE.Sprite(material);
 
-    // 等級に応じたサイズ（Bloom効果があるので控えめに）
-    let scale = Math.max(0.8, (6.5 - star.mag) * 2.8);
-    if (star.mag < 1) scale *= 2.2;
-    else if (star.mag < 2) scale *= 1.6;
-    else if (star.mag < 3) scale *= 1.2;
+    // 指数関数的サイズ（明るい星と暗い星の光量差を現実に近く表現）
+    const scale = starVisualScale(star.mag);
     sprite.scale.set(scale, scale, 1);
 
     scene.add(sprite);
@@ -638,9 +783,9 @@ function updateIntroCamera(): boolean {
   // イーズアウト（cubic）
   const t = 1 - Math.pow(1 - introProgress, 3);
 
-  // 高度: 5° → 45°
+  // 高度: 5° → 25°
   const startAlt = 5;
-  const endAlt = 45;
+  const endAlt = 25;
   viewAltitude = startAlt + (endAlt - startAlt) * t;
 
   if (introProgress >= 1.0) {
@@ -683,31 +828,29 @@ function updatePositionsAndRender() {
 
   const now = Date.now();
 
-  // 1. 各星の3D位置更新
+  // 1. 各星の3D位置更新（奥行きレイヤー分離 → 視差効果）
   starsData.forEach((star) => {
     const hor = equatorialToHorizontal(star.ra, star.dec, lst, latitude);
-    const pos3d = horizonToCartesian(hor.az, hor.alt, DOME_RADIUS);
+    // 等級に応じた配置半径：明るい星を手前に配置してパララックスを演出
+    const radius = starLayerRadius(star.mag);
+    const pos3d = horizonToCartesian(hor.az, hor.alt, radius);
 
     const sprite = starObjects.get(star.id);
     if (sprite) {
       sprite.position.copy(pos3d);
       sprite.visible = hor.alt >= -2;
 
-      // 瞬き効果（明るい星のみ）
-      let size = Math.max(0.8, (6.5 - star.mag) * 2.8);
-      if (star.mag < 1) size *= 2.2;
-      else if (star.mag < 2) size *= 1.6;
-      else if (star.mag < 3) size *= 1.2;
-
-      if (star.mag < 3) {
-        const twinkle = 0.88 + 0.12 * Math.sin(now * 0.003 + star.id * 17.3);
+      // 指数関数的サイズ＋瞬き（明るい星のみ瞬き）
+      let size = starVisualScale(star.mag);
+      if (star.mag < 3.0) {
+        const twinkle = 0.90 + 0.10 * Math.sin(now * 0.003 + star.id * 17.3);
         size *= twinkle;
       }
       sprite.scale.set(size, size, 1);
     }
   });
 
-  // 2. 星座線の更新
+  // 2. 星座線の更新（中間レイヤーに配置）
   if (showConstellations && constellationLinesData.length > 0) {
     let idx = 0;
     constellationLinesData.forEach((constData) => {
@@ -715,8 +858,8 @@ function updatePositionsAndRender() {
         if (idx + 6 > constellationPositions.length) return;
         if (seg.alt1 < 0 || seg.alt2 < 0) return;
 
-        const p1 = horizonToCartesian(seg.az1, seg.alt1, DOME_RADIUS - 1);
-        const p2 = horizonToCartesian(seg.az2, seg.alt2, DOME_RADIUS - 1);
+        const p1 = horizonToCartesian(seg.az1, seg.alt1, LAYER_CONSTEL);
+        const p2 = horizonToCartesian(seg.az2, seg.alt2, LAYER_CONSTEL);
 
         constellationPositions[idx++] = p1.x;
         constellationPositions[idx++] = p1.y;
@@ -744,23 +887,19 @@ function updatePositionsAndRender() {
   }
   camera.lookAt(new THREE.Vector3(targetX, targetY, targetZ));
 
-  // 4. グリッドをわずかにアニメ（大気揺らぎ演出）
-  if (horizonGrid) {
-    const gridMat = horizonGrid.material as THREE.LineBasicMaterial;
-    gridMat.opacity = 0.35 + 0.15 * Math.sin(now * 0.0005);
-  }
-
-  // 5. 大気リングのパルス（呼吸するような光）
+  // 4. 大気リングのパルス（呼吸するような光）
   if (atmosphereRing) {
     const atmoMat = atmosphereRing.material as THREE.MeshBasicMaterial;
     atmoMat.opacity = 0.08 + 0.04 * Math.sin(now * 0.0008);
   }
 
-  // 6. Bloomパラメータをズームに合わせて調整
+  // 5. Bloomパラメータをズームに合わせて動的調整
+  //    望遠時: threshold上げて明るい星だけ爆発 → コントラスト最大化
+  //    広角時: 全体的なグロー感を重視
   if (bloomPass) {
-    const zoomFactor = baseFov / camera.fov;
-    bloomPass.strength = 1.2 + zoomFactor * 0.3;
-    bloomPass.threshold = 0.05 + (1 / zoomFactor) * 0.05;
+    const zoomFactor = baseFov / camera.fov; // >1 で望遠、<1 で超広角
+    bloomPass.strength = 1.6 + zoomFactor * 0.5;
+    bloomPass.threshold = Math.max(0.0, 0.15 * (zoomFactor - 0.5));
   }
 
   // 7. WebGL（Bloom付き）レンダリング
@@ -1154,7 +1293,8 @@ function initEvents() {
   // ホイールズーム
   webglCanvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    camera.fov = Math.max(10.0, Math.min(75.0, camera.fov * (e.deltaY < 0 ? (1/1.08) : 1.08)));
+    // 広角85°〜望遠10°の広いズーム範囲（超広角視点が最大の3D感）
+    camera.fov = Math.max(10.0, Math.min(100.0, camera.fov * (e.deltaY < 0 ? (1/1.08) : 1.08)));
     camera.updateProjectionMatrix();
   }, { passive: false });
 
