@@ -1,18 +1,22 @@
 import * as THREE from 'three';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
 // ==========================================
 // 型定義
 // ==========================================
 
 interface StarData {
-  id: number;     // HIP番号
-  ra: number;     // 赤経 (時間)
-  dec: number;    // 赤緯 (度)
-  mag: number;    // 等級
-  bv: number;     // B-V色指数
-  color: string;  // 星の色 (hex)
-  az: number;     // 方位角
-  alt: number;    // 高度
+  id: number;
+  ra: number;
+  dec: number;
+  mag: number;
+  bv: number;
+  color: string;
+  az: number;
+  alt: number;
 }
 
 interface ConstellationSegment {
@@ -63,34 +67,28 @@ interface DSOData {
 // グローバル状態
 // ==========================================
 
-// 観測地設定 (デフォルト: 東京)
 let latitude = 35.68;
 let longitude = 139.76;
 
-// 時間設定
 let currentDate = new Date();
 let isTimeFlowing = true;
 let timeSpeed = 1;
 
-// 視野設定
 let viewAzimuth = 180;
 let viewAltitude = 45;
 let baseFov = 60;
 
-// 描画設定
 let showConstellations = true;
 let showStarNames = true;
 let showPlanets = true;
 let showDSO = true;
 
-// マウスインタラクション
 let isDragging = false;
 let startMouseX = 0;
 let startMouseY = 0;
 let startAzimuth = 180;
 let startAltitude = 45;
 
-// WebGL & 2D Overlay
 let webglCanvas: HTMLCanvasElement;
 let overlayCanvas: HTMLCanvasElement;
 let ctx2d: CanvasRenderingContext2D;
@@ -98,30 +96,39 @@ let ctx2d: CanvasRenderingContext2D;
 let scene: THREE.Scene;
 let camera: THREE.PerspectiveCamera;
 let renderer: THREE.WebGLRenderer;
+let composer: EffectComposer;
+let bloomPass: UnrealBloomPass;
 
-// 3Dオブジェクト
 const starObjects: Map<number, THREE.Sprite> = new Map();
 let constellationMesh: THREE.LineSegments;
+let milkyWayParticles: THREE.Points;
+let horizonGrid: THREE.GridHelper;
+let atmosphereRing: THREE.Mesh;
 
-// 星データ (APIから取得)
 let starsData: StarData[] = [];
 let constellationLinesData: ConstellationLineData[] = [];
 let constellationMeta: Record<string, ConstellationMeta> = {};
 let planetsData: PlanetData[] = [];
 let dsoData: DSOData[] = [];
 
-// 惑星・DSO 更新タイマー
 let planetsDsoLastUpdate = 0;
-const PLANETS_DSO_UPDATE_INTERVAL_MS = 30000; // 30秒ごとに更新
+const PLANETS_DSO_UPDATE_INTERVAL_MS = 30000;
 
-// 星座線バッファ (最大 1500セグメント × 2頂点 × 3成分)
 const MAX_CONST_SEGMENTS = 1500;
 const constellationPositions = new Float32Array(MAX_CONST_SEGMENTS * 2 * 3);
 
 const DOME_RADIUS = 500;
 
 // ==========================================
-// 天体計算アルゴリズム (クライアントサイド)
+// イントロアニメ状態
+// ==========================================
+let introActive = true;
+let introProgress = 0; // 0.0 → 1.0
+const INTRO_DURATION = 3000; // ms
+let introStartTime = 0;
+
+// ==========================================
+// 天体計算アルゴリズム
 // ==========================================
 
 function getJulianDate(date: Date): number {
@@ -194,29 +201,137 @@ function createStarTexture(color: string): THREE.Texture {
   if (textureCache.has(color)) return textureCache.get(color)!;
 
   const canvas = document.createElement('canvas');
-  canvas.width = 64;
-  canvas.height = 64;
+  canvas.width = 128;
+  canvas.height = 128;
   const ctx = canvas.getContext('2d')!;
 
-  // 色をRGBに分解
   const r = parseInt(color.slice(1, 3), 16);
   const g = parseInt(color.slice(3, 5), 16);
   const b = parseInt(color.slice(5, 7), 16);
 
-  const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
-  grad.addColorStop(0.0, `rgba(255, 255, 255, 1.0)`);
-  grad.addColorStop(0.12, `rgba(${r}, ${g}, ${b}, 1.0)`);
-  grad.addColorStop(0.35, `rgba(${r}, ${g}, ${b}, 0.55)`);
-  grad.addColorStop(0.70, `rgba(${r}, ${g}, ${b}, 0.1)`);
-  grad.addColorStop(1.0,  `rgba(0, 0, 0, 0)`);
+  // 外側の大きなグロー
+  const outerGlow = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  outerGlow.addColorStop(0.0,  `rgba(255, 255, 255, 0.0)`);
+  outerGlow.addColorStop(0.3,  `rgba(${r}, ${g}, ${b}, 0.0)`);
+  outerGlow.addColorStop(0.55, `rgba(${r}, ${g}, ${b}, 0.08)`);
+  outerGlow.addColorStop(0.75, `rgba(${r}, ${g}, ${b}, 0.18)`);
+  outerGlow.addColorStop(0.88, `rgba(${r}, ${g}, ${b}, 0.35)`);
+  outerGlow.addColorStop(1.0,  `rgba(0, 0, 0, 0)`);
+  ctx.fillStyle = outerGlow;
+  ctx.fillRect(0, 0, 128, 128);
 
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, 64, 64);
+  // 内側の輝点
+  const innerGrad = ctx.createRadialGradient(64, 64, 0, 64, 64, 32);
+  innerGrad.addColorStop(0.0,  `rgba(255, 255, 255, 1.0)`);
+  innerGrad.addColorStop(0.08, `rgba(255, 255, 255, 1.0)`);
+  innerGrad.addColorStop(0.2,  `rgba(${r}, ${g}, ${b}, 0.9)`);
+  innerGrad.addColorStop(0.45, `rgba(${r}, ${g}, ${b}, 0.5)`);
+  innerGrad.addColorStop(0.75, `rgba(${r}, ${g}, ${b}, 0.1)`);
+  innerGrad.addColorStop(1.0,  `rgba(0, 0, 0, 0)`);
+  ctx.fillStyle = innerGrad;
+  ctx.fillRect(0, 0, 128, 128);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   textureCache.set(color, texture);
   return texture;
+}
+
+// 天の川パーティクル用テクスチャ
+function createMilkyWayTexture(): THREE.Texture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 32;
+  canvas.height = 32;
+  const ctx = canvas.getContext('2d')!;
+  const grad = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+  grad.addColorStop(0.0, 'rgba(220, 230, 255, 0.8)');
+  grad.addColorStop(0.4, 'rgba(180, 200, 255, 0.3)');
+  grad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 32, 32);
+  return new THREE.CanvasTexture(canvas);
+}
+
+// ==========================================
+// 天の川パーティクルシステム
+// ==========================================
+
+function buildMilkyWay() {
+  if (milkyWayParticles) {
+    scene.remove(milkyWayParticles);
+    (milkyWayParticles.geometry as THREE.BufferGeometry).dispose();
+  }
+
+  const COUNT = 8000;
+  const positions = new Float32Array(COUNT * 3);
+  const colors = new Float32Array(COUNT * 3);
+  const sizes = new Float32Array(COUNT);
+
+  // 銀河面（銀緯0°付近、銀経0〜360°）に沿ってパーティクルを配置
+  // 銀河面の傾き（赤道座標系における）を近似する
+  // 銀河面を赤道傾斜（約62°）で傾けた帯として表現
+  for (let i = 0; i < COUNT; i++) {
+    // 銀経（0〜360°）と銀緯（ガウス分布で±15°以内に集中）
+    const galLon = Math.random() * Math.PI * 2;
+    const galLat = (Math.random() - 0.5) * 0.5; // ±14°程度
+
+    // 銀河座標から赤道座標への変換（簡略版）
+    // 銀河北極: RA=192.85°, Dec=27.13°, 銀河中心: RA=266.4°, Dec=-28.9°
+    const sinB = Math.sin(galLat);
+    const cosB = Math.cos(galLat);
+    const sinL = Math.sin(galLon);
+    const cosL = Math.cos(galLon);
+
+    // 銀河座標系から赤道座標系への変換行列（J2000.0）
+    // NGP: ra=192.8595°, dec=27.1284°
+    // Node: 122.9319°
+    const ngpRa  = 192.8595 * Math.PI / 180;
+    const ngpDec = 27.1284  * Math.PI / 180;
+    const node   = 122.9319 * Math.PI / 180;
+
+    const sinDec = sinB * Math.sin(ngpDec) +
+                   cosB * Math.cos(ngpDec) * Math.sin(galLon - (Math.PI / 2 - node));
+    const dec = Math.asin(Math.max(-1, Math.min(1, sinDec)));
+
+    const cosRaMinusNgpRa = (cosB * Math.cos(galLon - (Math.PI / 2 - node))) / Math.cos(dec);
+    const sinRaMinusNgpRa = (cosB * Math.sin(ngpDec) * Math.sin(galLon - (Math.PI / 2 - node)) -
+                             sinB * Math.cos(ngpDec)) / Math.cos(dec);
+    const ra = (Math.atan2(sinRaMinusNgpRa, cosRaMinusNgpRa) + ngpRa + Math.PI * 2) % (Math.PI * 2);
+
+    // 赤道座標→3D球面座標（ドーム上に配置）
+    const r = DOME_RADIUS - 5 + Math.random() * 3;
+    positions[i * 3 + 0] = r * Math.cos(dec) * Math.cos(ra);
+    positions[i * 3 + 1] = r * Math.sin(dec);
+    positions[i * 3 + 2] = -r * Math.cos(dec) * Math.sin(ra);
+
+    // 色: 青白〜白〜微黄色のランダム
+    const t = Math.random();
+    colors[i * 3 + 0] = 0.7 + t * 0.3;
+    colors[i * 3 + 1] = 0.75 + t * 0.25;
+    colors[i * 3 + 2] = 0.85 + (1 - t) * 0.15;
+
+    // サイズ: 中心部に近い（ランダムで小〜大）
+    sizes[i] = 1.5 + Math.random() * 3.0;
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+
+  const mat = new THREE.PointsMaterial({
+    size: 2.5,
+    map: createMilkyWayTexture(),
+    vertexColors: true,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    opacity: 0.55,
+    sizeAttenuation: true,
+  });
+
+  milkyWayParticles = new THREE.Points(geo, mat);
+  scene.add(milkyWayParticles);
 }
 
 // ==========================================
@@ -229,39 +344,127 @@ function init3D() {
   ctx2d = overlayCanvas.getContext('2d')!;
 
   scene = new THREE.Scene();
-  camera = new THREE.PerspectiveCamera(baseFov, 1, 0.1, 2000);
+
+  // 大気散乱を模した深い青黒フォグ（地平線付近が霞む）
+  scene.fog = new THREE.FogExp2(0x000510, 0.00035);
+
+  camera = new THREE.PerspectiveCamera(baseFov, 1, 0.1, 3000);
   camera.position.set(0, 0, 0);
 
-  renderer = new THREE.WebGLRenderer({ canvas: webglCanvas, antialias: true, alpha: false });
+  renderer = new THREE.WebGLRenderer({
+    canvas: webglCanvas,
+    antialias: true,
+    alpha: false,
+    powerPreference: 'high-performance',
+  });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 0.9;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-  // 地面 (地平線下を隠す)
-  const groundGeo = new THREE.RingGeometry(0, DOME_RADIUS + 5, 64);
-  const groundMat = new THREE.MeshBasicMaterial({ color: 0x020309, side: THREE.DoubleSide, depthWrite: true });
+  // ========== EffectComposer (Bloom) ==========
+  composer = new EffectComposer(renderer);
+  const renderPass = new RenderPass(scene, camera);
+  composer.addPass(renderPass);
+
+  bloomPass = new UnrealBloomPass(
+    new THREE.Vector2(window.innerWidth, window.innerHeight),
+    1.4,   // strength
+    0.4,   // radius
+    0.1    // threshold
+  );
+  composer.addPass(bloomPass);
+
+  const outputPass = new OutputPass();
+  composer.addPass(outputPass);
+
+  // ========== 地面（不透明な円盤で地平線下を隠す） ==========
+  const groundGeo = new THREE.CircleGeometry(DOME_RADIUS + 10, 128);
+  const groundMat = new THREE.MeshBasicMaterial({
+    color: 0x010208,
+    side: THREE.DoubleSide,
+    depthWrite: true,
+  });
   const ground = new THREE.Mesh(groundGeo, groundMat);
   ground.rotation.x = Math.PI / 2;
-  ground.position.y = -1;
+  ground.position.y = -1.0;
   scene.add(ground);
 
-  // 地平線リング
-  const ringGeo = new THREE.RingGeometry(DOME_RADIUS - 1, DOME_RADIUS + 1, 128);
-  const ringMat = new THREE.MeshBasicMaterial({ color: 0x00bcd4, side: THREE.DoubleSide });
-  const horizonRing = new THREE.Mesh(ringGeo, ringMat);
-  horizonRing.rotation.x = Math.PI / 2;
-  horizonRing.position.y = -0.5;
-  scene.add(horizonRing);
+  // ========== 地平線グリッド（奥行き演出） ==========
+  horizonGrid = new THREE.GridHelper(
+    DOME_RADIUS * 2, // 全体サイズ
+    80,              // 分割数
+    0x004466,        // 中心線の色
+    0x001a2e         // グリッド線の色
+  );
+  horizonGrid.position.y = -0.5;
+  // GridHelper のマテリアルに透明度設定
+  const gridMat = horizonGrid.material as THREE.LineBasicMaterial;
+  gridMat.transparent = true;
+  gridMat.opacity = 0.55;
+  scene.add(horizonGrid);
 
-  // 星座線オブジェクト
+  // ========== 大気散乱リング（地平線のグロー） ==========
+  // 地平線付近に浮かぶ青いグロー帯（大気散乱の表現）
+  const atmoGeo = new THREE.TorusGeometry(DOME_RADIUS, 12, 16, 200);
+  const atmoMat = new THREE.MeshBasicMaterial({
+    color: 0x0077aa,
+    transparent: true,
+    opacity: 0.12,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  atmosphereRing = new THREE.Mesh(atmoGeo, atmoMat);
+  atmosphereRing.rotation.x = Math.PI / 2;
+  atmosphereRing.position.y = 8;
+  scene.add(atmosphereRing);
+
+  // 内側のより明るいグロー帯
+  const innerAtmoGeo = new THREE.TorusGeometry(DOME_RADIUS, 5, 8, 200);
+  const innerAtmoMat = new THREE.MeshBasicMaterial({
+    color: 0x00aacc,
+    transparent: true,
+    opacity: 0.25,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const innerAtmoRing = new THREE.Mesh(innerAtmoGeo, innerAtmoMat);
+  innerAtmoRing.rotation.x = Math.PI / 2;
+  innerAtmoRing.position.y = 2;
+  scene.add(innerAtmoRing);
+
+  // ========== 天頂方向の薄い円（穹窿感を強調） ==========
+  const zenithRingGeo = new THREE.RingGeometry(5, 15, 64);
+  const zenithRingMat = new THREE.MeshBasicMaterial({
+    color: 0x3355ff,
+    transparent: true,
+    opacity: 0.08,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const zenithRing = new THREE.Mesh(zenithRingGeo, zenithRingMat);
+  zenithRing.position.y = DOME_RADIUS - 5;
+  scene.add(zenithRing);
+
+  // ========== 星座線 ==========
   const constGeo = new THREE.BufferGeometry();
   constGeo.setAttribute('position', new THREE.BufferAttribute(constellationPositions, 3));
   const constMat = new THREE.LineBasicMaterial({
-    color: 0x5ba3ff,
+    color: 0x4499ff,
     transparent: true,
-    opacity: 0.3,
-    linewidth: 1
+    opacity: 0.45,
+    linewidth: 1,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
   });
   constellationMesh = new THREE.LineSegments(constGeo, constMat);
   scene.add(constellationMesh);
+
+  // ========== 天の川 ==========
+  buildMilkyWay();
 }
 
 // ==========================================
@@ -269,19 +472,16 @@ function init3D() {
 // ==========================================
 
 async function loadFromAPI(): Promise<void> {
-  // ステータス表示
   const statusEl = document.getElementById('loading-status');
   if (statusEl) statusEl.textContent = 'APIからデータ取得中...';
 
   try {
-    // 星座メタデータを先に取得
     const metaRes = await fetch('http://localhost:8000/api/constellations');
     if (metaRes.ok) {
       const metaData = await metaRes.json();
       constellationMeta = metaData.constellations;
     }
 
-    // 全天データ取得
     const skyRes = await fetch(
       `http://localhost:8000/api/sky?lat=${latitude}&lng=${longitude}&mag_limit=6.0`
     );
@@ -294,21 +494,19 @@ async function loadFromAPI(): Promise<void> {
     dsoData = skyData.deep_sky_objects || [];
     planetsDsoLastUpdate = Date.now();
 
-    if (statusEl) statusEl.textContent = `${starsData.length}星 / 惑星${planetsData.length} / DSO${dsoData.length}天体`;
-    console.log(`✓ API loaded: ${starsData.length} stars, ${constellationLinesData.length} constellations, ${planetsData.length} planets, ${dsoData.length} DSOs`);
+    if (statusEl) statusEl.textContent = `${starsData.length}星 / 感星${planetsData.length} / DSO${dsoData.length}天体`;
+    console.log(`✓ API loaded: ${starsData.length} stars, ${constellationLinesData.length} constellations`);
 
-    // 星スプライトを構築
     buildStarSprites();
 
   } catch (err) {
     console.error('API load failed:', err);
     if (statusEl) statusEl.textContent = 'APIエラー: バックエンドを起動してください';
-    showToast('バックエンドAPIに接続できません。`uvicorn main:app` を起動してください。', 'error');
+    showToast('バックエンドAPIに接続できません。', 'error');
   }
 }
 
 function buildStarSprites() {
-  // 既存の星を削除
   starObjects.forEach(sprite => scene.remove(sprite));
   starObjects.clear();
 
@@ -323,9 +521,11 @@ function buildStarSprites() {
 
     const sprite = new THREE.Sprite(material);
 
-    // 等級に応じたサイズ
-    let scale = Math.max(1.0, (6.5 - star.mag) * 3.2);
-    if (star.mag < 0) scale *= 1.5; // 特に明るい星は大きく
+    // 等級に応じたサイズ（Bloom効果があるので控えめに）
+    let scale = Math.max(0.8, (6.5 - star.mag) * 2.8);
+    if (star.mag < 1) scale *= 2.2;
+    else if (star.mag < 2) scale *= 1.6;
+    else if (star.mag < 3) scale *= 1.2;
     sprite.scale.set(scale, scale, 1);
 
     scene.add(sprite);
@@ -336,18 +536,10 @@ function buildStarSprites() {
 }
 
 // ==========================================
-// 光害グラデーションドーム
+// 光害グラデーションドーム（2D Overlay）
 // ==========================================
 
-/**
- * 地平線付近に半透明のグラデーションを重ねて光害（街明かり・大気の厚み）を表現する。
- * - 地平線スクリーン位置を 8方位でサンプリングし、画面下部の帯全体をカバー
- * - Layer 1: 街明かり（橙〜黄）… 高度 0〜5° 相当
- * - Layer 2: 大気散乱（青白）… 高度 0〜15° 相当
- * - Layer 3: 薄明かり（藍〜紺）… 高度 0〜25° 相当
- */
 function drawLightPollution(w: number, h: number, lst: number) {
-  // ★太陽の高度を考慮して、昼間（薄明含む）は街明かりをフェードアウト
   const sun = planetsData.find(p => p.name === 'Sun');
   let sunAlt = -20;
   if (sun) {
@@ -360,7 +552,6 @@ function drawLightPollution(w: number, h: number, lst: number) {
   }
   if (sunFade <= 0.01) return;
 
-  // 地平線上の8方位をスクリーン座標に変換
   const horizonAzimuths = [0, 45, 90, 135, 180, 225, 270, 315];
   const horizonScreenY: number[] = [];
 
@@ -370,17 +561,11 @@ function drawLightPollution(w: number, h: number, lst: number) {
     if (scr.visible) horizonScreenY.push(scr.y);
   }
 
-  // ★修正: 地平線が一点も画面内に見えないなら描画しない（視点が上を向いているとき）
   if (horizonScreenY.length === 0) return;
 
-  // 地平線のY座標（スクリーン上で最も下に見える位置）
   const baseY = Math.max(...horizonScreenY);
-
-  // 地平線が画面下端より下（見切れている）なら描画しない
   if (baseY >= h) return;
 
-  // ★フェードアウト: 地平線が画面下80%より下に来たら徐々に透明化
-  // こうすることで地平線がギリギリ見えている段階でも自然に消える
   const fadeThreshold = h * 0.80;
   const fadeAlpha = baseY < fadeThreshold
     ? 1.0
@@ -388,48 +573,32 @@ function drawLightPollution(w: number, h: number, lst: number) {
 
   if (fadeAlpha <= 0.01) return;
 
-  // 高度 20°相当のスクリーン位置（グラデーション高さの基準）
-  // visible でない場合は baseY から画面の1/4上を推定
   const pos20 = horizonToCartesian(viewAzimuth, 20, DOME_RADIUS);
   const scr20 = getScreenPosition(pos20);
   const alt20Y = scr20.visible ? scr20.y : baseY - Math.min(gradEstimate(h), baseY - 20);
 
-  // グラデーションの高さ（最低80px確保）
   const gradHeight = Math.max(80, baseY - alt20Y);
 
-  // 全レイヤーに fadeAlpha と sunFade を乗算して自然なフェードを実現
   ctx2d.save();
   ctx2d.globalAlpha = fadeAlpha * sunFade;
 
-  // ─── 統合グラデーション: 地平線（最明）→ 天頂方向（透明）
-  // colorStop 0.0 = baseY（地平線、最も明るい）
-  // colorStop 1.0 = baseY - gradHeight（天頂方向、透明）
-  // こうすることで「下ほど明るく、上に行くほど暗く消える」が保証される
   {
     const grad = ctx2d.createLinearGradient(0, baseY, 0, baseY - gradHeight);
-    // 地平線直上: 街明かり（LED光）の散乱による、ほんのり白み・青みがかった明るい夜空
     grad.addColorStop(0.00, 'rgba(180, 200, 230, 0.28)');
-    // 少し上: 白い明かりから夜空の青へとスムーズに遷移
     grad.addColorStop(0.15, 'rgba(130, 160, 195, 0.18)');
-    // 中間: 夜空の深い青へ
     grad.addColorStop(0.35, 'rgba( 80, 110, 160, 0.12)');
-    // さらに上: 藍色の薄明かり
     grad.addColorStop(0.60, 'rgba( 40,  60, 120, 0.06)');
-    // 上端: ほぼ透明
     grad.addColorStop(0.85, 'rgba( 15,  25,  70, 0.02)');
     grad.addColorStop(1.00, 'rgba(  5,  10,  40, 0.00)');
     ctx2d.fillStyle = grad;
-    // 地平線から下（地面）も含めて塗る（地面エリアは colorStop 0.0 でクランプ）
     ctx2d.fillRect(0, baseY - gradHeight, w, gradHeight + (h - baseY) + 10);
   }
 
-  // ─── 都市ハロー: 地平線中央に広がる淡い青白の街明かり（ラジアル）
-  // ハローは地平線付近のみ（gradHeight の半分以内）に限定し、上には広げない
   {
     const cx = w * 0.5;
     const cy = baseY + 20;
     const rx = w * 0.55;
-    const ry = gradHeight * 0.40; // 高さをコンパクトに
+    const ry = gradHeight * 0.40;
 
     ctx2d.save();
     ctx2d.scale(1.0, ry / rx);
@@ -437,8 +606,7 @@ function drawLightPollution(w: number, h: number, lst: number) {
       cx, cy * (rx / ry), 0,
       cx, cy * (rx / ry), rx
     );
-    // 都市ハローも橙ではなく、LED照明をイメージした淡い青白へ変更
-    haloGrad.addColorStop(0.0,  'rgba(215, 230, 255, 0.10)'); // 中心: 淡い青白
+    haloGrad.addColorStop(0.0,  'rgba(215, 230, 255, 0.10)');
     haloGrad.addColorStop(0.35, 'rgba(170, 195, 235, 0.05)');
     haloGrad.addColorStop(0.70, 'rgba(120, 150, 200, 0.02)');
     haloGrad.addColorStop(1.0,  'rgba(80,  110, 160, 0.00)');
@@ -450,12 +618,36 @@ function drawLightPollution(w: number, h: number, lst: number) {
   ctx2d.restore();
 }
 
-// gradHeight 推定用ヘルパー（alt20Y が画面外の場合のフォールバック計算）
 function gradEstimate(h: number): number {
-  // FOVから高度20°相当の画面ピクセル数を推定
   if (!camera) return h * 0.25;
   const pixPerDeg = h / camera.fov;
   return pixPerDeg * 20;
+}
+
+// ==========================================
+// イントロアニメーション
+// ==========================================
+
+function updateIntroCamera(): boolean {
+  const now = performance.now();
+  if (introStartTime === 0) introStartTime = now;
+
+  const elapsed = now - introStartTime;
+  introProgress = Math.min(elapsed / INTRO_DURATION, 1.0);
+
+  // イーズアウト（cubic）
+  const t = 1 - Math.pow(1 - introProgress, 3);
+
+  // 高度: 5° → 45°
+  const startAlt = 5;
+  const endAlt = 45;
+  viewAltitude = startAlt + (endAlt - startAlt) * t;
+
+  if (introProgress >= 1.0) {
+    introActive = false;
+    return false;
+  }
+  return true;
 }
 
 // ==========================================
@@ -468,7 +660,6 @@ function updatePositionsAndRender() {
   const w = overlayCanvas.width;
   const h = overlayCanvas.height;
 
-  // クライアントサイドで星間計算
   const jd = getJulianDate(currentDate);
   const lst = getLocalSiderealTime(jd, longitude);
 
@@ -487,8 +678,12 @@ function updatePositionsAndRender() {
   document.getElementById('stat-stars')!.textContent =
     `${starsData.length}`;
 
-  // 1. 各星の3D位置更新 (クライアントサイド星間計算)
+  // イントロアニメ
+  if (introActive) updateIntroCamera();
+
   const now = Date.now();
+
+  // 1. 各星の3D位置更新
   starsData.forEach((star) => {
     const hor = equatorialToHorizontal(star.ra, star.dec, lst, latitude);
     const pos3d = horizonToCartesian(hor.az, hor.alt, DOME_RADIUS);
@@ -496,30 +691,30 @@ function updatePositionsAndRender() {
     const sprite = starObjects.get(star.id);
     if (sprite) {
       sprite.position.copy(pos3d);
-      sprite.visible = hor.alt >= 0;
+      sprite.visible = hor.alt >= -2;
 
-      // 瞬き効果
-      const twinkle = 0.85 + 0.15 * Math.sin(now * 0.003 + star.id * 17.3);
-      let size = Math.max(1.0, (6.5 - star.mag) * 3.2) * twinkle;
-      if (star.mag < 0) size *= 1.5;
+      // 瞬き効果（明るい星のみ）
+      let size = Math.max(0.8, (6.5 - star.mag) * 2.8);
+      if (star.mag < 1) size *= 2.2;
+      else if (star.mag < 2) size *= 1.6;
+      else if (star.mag < 3) size *= 1.2;
+
+      if (star.mag < 3) {
+        const twinkle = 0.88 + 0.12 * Math.sin(now * 0.003 + star.id * 17.3);
+        size *= twinkle;
+      }
       sprite.scale.set(size, size, 1);
     }
   });
 
-  // 2. 星座線の更新 (APIからの地平座標を使用)
+  // 2. 星座線の更新
   if (showConstellations && constellationLinesData.length > 0) {
     let idx = 0;
     constellationLinesData.forEach((constData) => {
       constData.segments.forEach((seg) => {
         if (idx + 6 > constellationPositions.length) return;
-
-        // 地平線より下にあるセグメントは描画しない
         if (seg.alt1 < 0 || seg.alt2 < 0) return;
 
-        // セグメントの両端を3D座標に変換
-        // APIは毎フレームの計算ではなく初回のAlt/Azを返すので、
-        // クライアントサイドで再計算する（高速化のためRA/Decから）
-        // ここではAPIから返された az/alt を使う (ほぼリアルタイム十分)
         const p1 = horizonToCartesian(seg.az1, seg.alt1, DOME_RADIUS - 1);
         const p2 = horizonToCartesian(seg.az2, seg.alt2, DOME_RADIUS - 1);
 
@@ -549,22 +744,41 @@ function updatePositionsAndRender() {
   }
   camera.lookAt(new THREE.Vector3(targetX, targetY, targetZ));
 
-  // 4. 3Dレンダリング
-  renderer.render(scene, camera);
+  // 4. グリッドをわずかにアニメ（大気揺らぎ演出）
+  if (horizonGrid) {
+    const gridMat = horizonGrid.material as THREE.LineBasicMaterial;
+    gridMat.opacity = 0.35 + 0.15 * Math.sin(now * 0.0005);
+  }
 
-  // 5. 2Dオーバーレイ描画
+  // 5. 大気リングのパルス（呼吸するような光）
+  if (atmosphereRing) {
+    const atmoMat = atmosphereRing.material as THREE.MeshBasicMaterial;
+    atmoMat.opacity = 0.08 + 0.04 * Math.sin(now * 0.0008);
+  }
+
+  // 6. Bloomパラメータをズームに合わせて調整
+  if (bloomPass) {
+    const zoomFactor = baseFov / camera.fov;
+    bloomPass.strength = 1.2 + zoomFactor * 0.3;
+    bloomPass.threshold = 0.05 + (1 / zoomFactor) * 0.05;
+  }
+
+  // 7. WebGL（Bloom付き）レンダリング
+  composer.render();
+
+  // 8. 2Dオーバーレイ描画
   ctx2d.clearRect(0, 0, w, h);
 
-  // 光害グラデーションドーム (地平線付近の大気・街明かり表現)
+  // 光害グラデーション
   drawLightPollution(w, h, lst);
 
-  // 明るい星の名前を表示 (API呼び出し時に取得したデータに名前がないため、HIP番号から判定)
+  // 明るい星の名前
   if (showStarNames) {
     ctx2d.font = "11px 'Outfit', sans-serif";
     ctx2d.textBaseline = "middle";
 
     starsData.forEach((star) => {
-      if (star.mag > 2.2) return; // 2等星以上のみ名前表示
+      if (star.mag > 2.2) return;
 
       const hor = equatorialToHorizontal(star.ra, star.dec, lst, latitude);
       if (hor.alt < 0) return;
@@ -602,18 +816,18 @@ function updatePositionsAndRender() {
     }
   });
 
-  // 6. 惑星描画
+  // 惑星描画
   if (showPlanets && planetsData.length > 0) {
     drawPlanets(lst);
   }
 
-  // 7. DSO描画
+  // DSO描画
   if (showDSO && dsoData.length > 0) {
     drawDSO();
   }
 }
 
-// HIP番号 → 星の日本語名 (主要な明るい星のみ)
+// HIP番号 → 星の日本語名
 const BRIGHT_STAR_NAMES: Record<number, string> = {
   32349: 'シリウス', 30438: 'カノープス', 69673: 'アークトゥルス',
   91262: 'ベガ', 24608: 'カペラ', 24436: 'リゲル',
@@ -633,23 +847,19 @@ const BRIGHT_STAR_NAMES: Record<number, string> = {
 
 function drawPlanets(lst: number) {
   planetsData.forEach((planet) => {
-    // リアルタイムでクライアント側の地平座標を再計算
     const hor = equatorialToHorizontal(planet.ra, planet.dec, lst, latitude);
-    if (hor.alt < 0) return; // 地平線下は描画しない
+    if (hor.alt < 0) return;
 
     const pos3d = horizonToCartesian(hor.az, hor.alt, DOME_RADIUS);
     const scr = getScreenPosition(pos3d);
     if (!scr.visible) return;
 
-    // 惑星のサイズ（等級に応じて）
     const baseSize = Math.max(6, (1.0 - planet.mag) * 4 + 10);
 
-    // 色をパース
     const r = parseInt(planet.color.slice(1, 3), 16);
     const g = parseInt(planet.color.slice(3, 5), 16);
     const b = parseInt(planet.color.slice(5, 7), 16);
 
-    // 光芒グラデーション（大きめのハロー）
     const haloRadius = baseSize * 3.5;
     const haloGrad = ctx2d.createRadialGradient(scr.x, scr.y, 0, scr.x, scr.y, haloRadius);
     haloGrad.addColorStop(0.0,  `rgba(255, 255, 255, 0.95)`);
@@ -663,7 +873,6 @@ function drawPlanets(lst: number) {
     ctx2d.fillStyle = haloGrad;
     ctx2d.fill();
 
-    // 惑星本体（円）
     const diskGrad = ctx2d.createRadialGradient(scr.x - baseSize * 0.2, scr.y - baseSize * 0.2, 0, scr.x, scr.y, baseSize);
     diskGrad.addColorStop(0, `rgba(255, 255, 255, 1.0)`);
     diskGrad.addColorStop(0.4, `rgba(${r}, ${g}, ${b}, 1.0)`);
@@ -673,7 +882,6 @@ function drawPlanets(lst: number) {
     ctx2d.fillStyle = diskGrad;
     ctx2d.fill();
 
-    // 名前ラベル
     const labelOffset = baseSize * 3 + 8;
     ctx2d.textAlign = 'left';
     ctx2d.textBaseline = 'middle';
@@ -691,14 +899,12 @@ function drawPlanets(lst: number) {
 
 function drawDSO() {
   dsoData.forEach((obj) => {
-    if (obj.alt < 0) return; // 地平線下は描画しない
+    if (obj.alt < 0) return;
 
     const pos3d = horizonToCartesian(obj.az, obj.alt, DOME_RADIUS);
     const scr = getScreenPosition(pos3d);
     if (!scr.visible) return;
 
-    // 視直径をスクリーン半径に変換
-    // FOVとcanvasサイズから 1分角あたりのピクセル数を計算
     const fovDeg = camera.fov;
     const pixPerDeg = overlayCanvas.height / fovDeg;
     const pixPerArcmin = pixPerDeg / 60.0;
@@ -709,12 +915,10 @@ function drawDSO() {
     ctx2d.textBaseline = 'middle';
 
     if (obj.type === 'galaxy') {
-      // 銀河: 傾いた楕円 + グラデーション
       const rx = screenRadius;
       const ry = screenRadius * 0.45;
-      const angle = Math.PI / 5; // 約36度傾き
+      const angle = Math.PI / 5;
 
-      // 内側グラデーション
       const grd = ctx2d.createRadialGradient(scr.x, scr.y, 0, scr.x, scr.y, rx);
       grd.addColorStop(0,   'rgba(255, 240, 200, 0.25)');
       grd.addColorStop(0.5, 'rgba(255, 220, 150, 0.12)');
@@ -728,7 +932,6 @@ function drawDSO() {
       ctx2d.fillStyle = grd;
       ctx2d.fill();
 
-      // 楕円アウトライン（点線）
       ctx2d.setLineDash([3, 4]);
       ctx2d.strokeStyle = 'rgba(255, 220, 130, 0.6)';
       ctx2d.lineWidth = 1;
@@ -736,7 +939,6 @@ function drawDSO() {
       ctx2d.setLineDash([]);
       ctx2d.restore();
 
-      // 名前ラベル（restore後）
       ctx2d.textAlign = 'left';
       ctx2d.textBaseline = 'middle';
       ctx2d.font = `10px 'Outfit', sans-serif`;
@@ -744,7 +946,6 @@ function drawDSO() {
       ctx2d.fillText(`${obj.id} ${obj.name_ja}`, scr.x + screenRadius + 4, scr.y);
 
     } else if (obj.type === 'nebula' || obj.type === 'supernova_remnant') {
-      // 星雲: 点線の丸 + 中心グラデーション
       const grd = ctx2d.createRadialGradient(scr.x, scr.y, 0, scr.x, scr.y, screenRadius);
       grd.addColorStop(0,   'rgba(100, 200, 255, 0.2)');
       grd.addColorStop(0.6, 'rgba(80, 160, 255, 0.08)');
@@ -755,7 +956,6 @@ function drawDSO() {
       ctx2d.fillStyle = grd;
       ctx2d.fill();
 
-      // 点線丸アウトライン
       ctx2d.setLineDash([3, 3]);
       ctx2d.strokeStyle = 'rgba(100, 200, 255, 0.7)';
       ctx2d.lineWidth = 1.2;
@@ -772,7 +972,6 @@ function drawDSO() {
       ctx2d.fillText(`${obj.id} ${obj.name_ja}`, scr.x + screenRadius + 4, scr.y);
 
     } else {
-      // 星団 (cluster / open_cluster): 点線の丸（破線間隔違い）
       ctx2d.beginPath();
       ctx2d.arc(scr.x, scr.y, screenRadius, 0, Math.PI * 2);
       ctx2d.fillStyle = 'rgba(180, 255, 180, 0.06)';
@@ -892,13 +1091,11 @@ function initEvents() {
   constellationCheckbox.addEventListener('change', () => { showConstellations = constellationCheckbox.checked; });
   starNamesCheckbox.addEventListener('change', () => { showStarNames = starNamesCheckbox.checked; });
 
-  // 惑星・DSOトグル
   const planetsCheckbox = document.getElementById('toggle-planets') as HTMLInputElement;
   const dsoCheckbox = document.getElementById('toggle-dso') as HTMLInputElement;
   if (planetsCheckbox) planetsCheckbox.addEventListener('change', () => { showPlanets = planetsCheckbox.checked; });
   if (dsoCheckbox) dsoCheckbox.addEventListener('change', () => { showDSO = dsoCheckbox.checked; });
 
-  // 星座選択ドロップダウン
   const constSelect = document.getElementById('constellation-select') as HTMLSelectElement;
   constSelect.addEventListener('change', () => {
     const cid = constSelect.value;
@@ -906,7 +1103,6 @@ function initEvents() {
     else hideConstellationInfo();
   });
 
-  // 情報パネルを閉じる
   document.getElementById('close-const-panel')?.addEventListener('click', () => {
     hideConstellationInfo();
     constSelect.value = '';
@@ -921,6 +1117,7 @@ function initEvents() {
 
   window.addEventListener('mousemove', (e) => {
     if (!isDragging) return;
+    if (introActive) { introActive = false; } // ドラッグでイントロスキップ
     const dx = e.clientX - startMouseX;
     const dy = e.clientY - startMouseY;
     const sensitivity = 0.15 * (camera.fov / 60.0);
@@ -943,6 +1140,7 @@ function initEvents() {
   webglCanvas.addEventListener('touchmove', (e) => {
     e.preventDefault();
     if (e.touches.length === 1) {
+      if (introActive) { introActive = false; }
       const dx = e.touches[0].clientX - lastTouchX;
       const dy = e.touches[0].clientY - lastTouchY;
       const sensitivity = 0.2 * (camera.fov / 60.0);
@@ -968,6 +1166,8 @@ function initEvents() {
     webglCanvas.width = w; webglCanvas.height = h;
     overlayCanvas.width = w; overlayCanvas.height = h;
     renderer.setSize(w, h);
+    composer.setSize(w, h);
+    bloomPass.resolution.set(w, h);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
   };
@@ -1043,14 +1243,13 @@ async function refreshPlanetsAndDSO() {
     constellationLinesData = skyData.constellation_lines;
     planetsDsoLastUpdate = Date.now();
   } catch (_) {
-    // サイレントに失敗（描画は前回データで継続）
+    // サイレントに失敗
   }
 }
 
 function tick() {
   updateTime();
 
-  // 惑星・DSOを30秒ごとにAPIから更新
   if (Date.now() - planetsDsoLastUpdate > PLANETS_DSO_UPDATE_INTERVAL_MS) {
     refreshPlanetsAndDSO();
   }
@@ -1064,13 +1263,17 @@ function tick() {
 // ==========================================
 
 async function start() {
+  // イントロ: カメラを地面近くから開始
+  viewAltitude = 5;
+
   init3D();
   initEvents();
   await loadFromAPI();
   if (Object.keys(constellationMeta).length > 0) {
     populateConstellationSelect();
   }
-  showToast(`Stellaris 起動完了 - ${starsData.length}星 / 88星座 / 惑星${planetsData.length}`, 'info');
+  showToast(`Stellaris 起動完了 - ${starsData.length}星 / 88星座 / 感星${planetsData.length}`, 'info');
+  introStartTime = performance.now();
   tick();
 }
 

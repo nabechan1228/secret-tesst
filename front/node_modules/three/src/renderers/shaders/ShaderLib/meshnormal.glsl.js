@@ -23,6 +23,7 @@ void main() {
 	#include <batching_vertex>
 
 	#include <beginnormal_vertex>
+	#include <morphinstance_vertex>
 	#include <morphnormal_vertex>
 	#include <skinbase_vertex>
 	#include <skinnormal_vertex>
@@ -57,7 +58,6 @@ uniform float opacity;
 
 #endif
 
-#include <packing>
 #include <uv_pars_fragment>
 #include <normal_pars_fragment>
 #include <bumpmap_pars_fragment>
@@ -67,12 +67,14 @@ uniform float opacity;
 
 void main() {
 
+	vec4 diffuseColor = vec4( 0.0, 0.0, 0.0, opacity );
+
 	#include <clipping_planes_fragment>
 	#include <logdepthbuf_fragment>
 	#include <normal_fragment_begin>
 	#include <normal_fragment_maps>
 
-	gl_FragColor = vec4( packNormalToRGB( normal ), opacity );
+	gl_FragColor = vec4( normalize( normal ) * 0.5 + 0.5, diffuseColor.a );
 
 	#ifdef OPAQUE
 
