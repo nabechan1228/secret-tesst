@@ -282,6 +282,8 @@ def get_sky(
                 "type":    obj["type"],
                 "size":    obj["size"],
                 "mag":     obj["mag"],
+                "ra":      obj["ra"],
+                "dec":     obj["dec"],
                 "az":      round(az_arr[i],  3),
                 "alt":     round(alt_val, 3),
             })
