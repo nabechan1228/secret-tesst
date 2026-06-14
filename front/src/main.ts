@@ -614,14 +614,18 @@ function init3D() {
   const constGeo = new THREE.BufferGeometry();
   constGeo.setAttribute('position', new THREE.BufferAttribute(constellationPositions, 3));
   const constMat = new THREE.LineBasicMaterial({
-    color: 0x4499ff,
+    color: 0x66aaff,
     transparent: true,
-    opacity: 0.45,
+    opacity: 0.55,
     linewidth: 1,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
+    depthTest: true,
+    fog: false,
   });
   constellationMesh = new THREE.LineSegments(constGeo, constMat);
+  constellationMesh.frustumCulled = false;
+  constellationMesh.renderOrder = 1;
   scene.add(constellationMesh);
 
   // ========== 天の川 ==========
@@ -689,13 +693,19 @@ function initWorker() {
         constellationPositions.set(constellationCoords.subarray(0, validConstellationElements));
         constellationMesh.geometry.setDrawRange(0, validConstellationElements / 3);
         constellationMesh.geometry.attributes.position.needsUpdate = true;
-        constellationMesh.visible = true;
+        constellationMesh.geometry.computeBoundingSphere();
+        constellationMesh.visible = validConstellationElements > 0;
       } else if (constellationMesh) {
         constellationMesh.visible = false;
       }
 
       isWorkerComputing = false;
     }
+  };
+
+  starWorker.onerror = (err) => {
+    console.error('Star worker error:', err);
+    isWorkerComputing = false;
   };
 }
 
@@ -729,12 +739,16 @@ function updateStarSpritesFromBuffer(coords: Float32Array) {
 
 function syncStarsToWorker() {
   if (starWorker && starsData.length > 0) {
-
     starWorker.postMessage({
       type: 'init',
       stars: starsData.map(s => ({ id: s.id, ra: s.ra, dec: s.dec, mag: s.mag })),
       constellations: constellationLinesData
     });
+    // init 直後に座標を更新（Worker 初期化完了後に星座線を描画）
+    const jd = getJulianDate(currentDate);
+    const lst = getLocalSiderealTime(jd, longitude);
+    isWorkerComputing = true;
+    starWorker.postMessage({ type: 'update', lst, latitude });
   }
 }
 
