@@ -43,6 +43,17 @@ interface ConstellationMeta {
   rank: number;
 }
 
+interface PlanetRecommendation {
+  name: string;
+  name_ja: string;
+  score: number;
+  mag: number;
+  max_alt: number;
+  visible_hours: number;
+  time_range: string;
+  comment: string;
+}
+
 interface PlanetData {
   name: string;
   name_ja: string;
@@ -71,6 +82,10 @@ interface DSOData {
 // ==========================================
 // グローバル状態
 // ==========================================
+
+let activeTrackPlanet: string | null = null;
+let isPlanetLockOn = false;
+let planetRecommendation: PlanetRecommendation | null = null;
 
 let latitude = 35.68;
 let longitude = 139.76;
@@ -1039,7 +1054,7 @@ function updatePositionsAndRender() {
     milkyWayParticles.quaternion.multiplyQuaternions(q2, q1);
   }
 
-  // ガイド自動回転追従
+  // ガイド自動回転追従と惑星自動追尾
   if (isAutoRotatingToGuide && guideTarget) {
     let diffAz = guideTarget.az - viewAzimuth;
     if (diffAz > 180) diffAz -= 360;
@@ -1049,6 +1064,24 @@ function updatePositionsAndRender() {
 
     viewAzimuth = (viewAzimuth + diffAz * 0.05 + 360) % 360;
     viewAltitude = viewAltitude + diffAlt * 0.05;
+
+    // 目標位置に十分近づいたら自動回転を終了（ただし自動追尾中は除く）
+    if (!isPlanetLockOn && Math.abs(diffAz) < 0.1 && Math.abs(diffAlt) < 0.1) {
+      isAutoRotatingToGuide = false;
+    }
+  } else if (isPlanetLockOn && activeTrackPlanet) {
+    const trackP = planetsData.find(p => p.name === activeTrackPlanet);
+    if (trackP) {
+      let diffAz = trackP.az - viewAzimuth;
+      if (diffAz > 180) diffAz -= 360;
+      if (diffAz < -180) diffAz += 360;
+
+      const diffAlt = trackP.alt - viewAltitude;
+
+      // 自動追尾中はスムーズに追従 (イージング係数 0.08)
+      viewAzimuth = (viewAzimuth + diffAz * 0.08 + 360) % 360;
+      viewAltitude = viewAltitude + diffAlt * 0.08;
+    }
   }
 
   // 3. カメラ向き更新
@@ -1189,14 +1222,85 @@ function drawPlanets(lst: number) {
     ctx2d.fillStyle = diskGrad;
     ctx2d.fill();
 
+    const isRecommended = planetRecommendation && planetRecommendation.name === planet.name;
+    const isTracked = activeTrackPlanet === planet.name;
+
+    // 強調ターゲットエフェクトの描画 (見頃または自動追尾中)
+    if (isRecommended || isTracked) {
+      const now = Date.now();
+      ctx2d.save();
+
+      const pulse1 = 1.0 + 0.12 * Math.sin(now * 0.005);
+      const pulse2 = 1.25 - 0.08 * Math.cos(now * 0.005);
+
+      const r1 = baseSize * 2.2 * pulse1;
+      const r2 = baseSize * 2.8 * pulse2;
+
+      const glowColor = isTracked ? 'rgba(0, 230, 246, 0.85)' : 'rgba(255, 201, 71, 0.85)';
+      const shadowColor = isTracked ? 'rgba(0, 230, 246, 0.4)' : 'rgba(255, 201, 71, 0.4)';
+
+      // 外側破線リング
+      ctx2d.strokeStyle = glowColor;
+      ctx2d.lineWidth = 1.2;
+      ctx2d.shadowColor = shadowColor;
+      ctx2d.shadowBlur = 6;
+      ctx2d.setLineDash([4, 4]);
+      ctx2d.beginPath();
+      ctx2d.arc(scr.x, scr.y, r2, 0, Math.PI * 2);
+      ctx2d.stroke();
+      ctx2d.setLineDash([]);
+
+      // 内側実線リング
+      ctx2d.lineWidth = 1.8;
+      ctx2d.beginPath();
+      ctx2d.arc(scr.x, scr.y, r1, 0, Math.PI * 2);
+      ctx2d.stroke();
+
+      // 十字スコープ線
+      ctx2d.strokeStyle = isTracked ? 'rgba(0, 230, 246, 0.5)' : 'rgba(255, 201, 71, 0.5)';
+      ctx2d.lineWidth = 1.0;
+      const crossSize = baseSize * 3.5;
+      ctx2d.beginPath();
+      // 上
+      ctx2d.moveTo(scr.x, scr.y - r1 - 2);
+      ctx2d.lineTo(scr.x, scr.y - crossSize);
+      // 下
+      ctx2d.moveTo(scr.x, scr.y + r1 + 2);
+      ctx2d.lineTo(scr.x, scr.y + crossSize);
+      // 左
+      ctx2d.moveTo(scr.x - r1 - 2, scr.y);
+      ctx2d.lineTo(scr.x - crossSize, scr.y);
+      // 右
+      ctx2d.moveTo(scr.x + r1 + 2, scr.y);
+      ctx2d.lineTo(scr.x + crossSize, scr.y);
+      ctx2d.stroke();
+
+      ctx2d.restore();
+    }
+
     const labelOffset = baseSize * 3 + 8;
     ctx2d.textAlign = 'left';
     ctx2d.textBaseline = 'middle';
     ctx2d.font = `bold 12px 'Outfit', sans-serif`;
+
+    let labelText = planet.name_ja;
+    if (isRecommended) {
+      labelText = `🪐 ${planet.name_ja} (${planet.mag}等) [見頃]`;
+    } else if (isTracked) {
+      labelText = `🎯 ${planet.name_ja} (${planet.mag}等) [追尾中]`;
+    }
+
     ctx2d.fillStyle = 'rgba(0,0,0,0.75)';
-    ctx2d.fillText(planet.name_ja, scr.x + labelOffset + 1, scr.y + 1);
-    ctx2d.fillStyle = `rgba(${r + 60 > 255 ? 255 : r + 60}, ${g + 40 > 255 ? 255 : g + 40}, ${b + 20 > 255 ? 255 : b + 20}, 0.95)`;
-    ctx2d.fillText(planet.name_ja, scr.x + labelOffset, scr.y);
+    ctx2d.fillText(labelText, scr.x + labelOffset + 1, scr.y + 1);
+
+    if (isRecommended) {
+      ctx2d.fillStyle = '#ffc947'; // ゴールド
+    } else if (isTracked) {
+      ctx2d.fillStyle = '#00e6f6'; // シアン
+    } else {
+      ctx2d.fillStyle = `rgba(${r + 60 > 255 ? 255 : r + 60}, ${g + 40 > 255 ? 255 : g + 40}, ${b + 20 > 255 ? 255 : b + 20}, 0.95)`;
+    }
+    ctx2d.fillText(labelText, scr.x + labelOffset, scr.y);
   });
 }
 
@@ -1417,6 +1521,36 @@ function drawAsterismGuide(lst: number) {
 }
 
 // ==========================================
+// 惑星見頃・追跡UI更新
+// ==========================================
+
+function updatePlanetTrackerUI() {
+  const infoEl = document.getElementById('planet-tracker-info');
+  const controlsEl = document.getElementById('planet-tracker-controls');
+  if (!infoEl || !controlsEl) return;
+
+  if (!planetRecommendation || planetRecommendation.score === 0) {
+    infoEl.innerHTML = `<div style="font-size:0.82rem;color:var(--text-muted);">今夜は肉眼で見頃な惑星はありません。</div>`;
+    controlsEl.style.display = 'none';
+    return;
+  }
+
+  infoEl.innerHTML = `
+    <div style="font-size:0.9rem;font-weight:bold;color:var(--gold);margin-bottom:6px;display:flex;align-items:center;gap:4px;">
+      🪐 今夜の見頃: ${planetRecommendation.name_ja} (${planetRecommendation.name})
+    </div>
+    <div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:6px;line-height:1.4;">
+      明るさ: ${planetRecommendation.mag}等 / 最大高度: ${planetRecommendation.max_alt}°<br>
+      時間帯: ${planetRecommendation.time_range}
+    </div>
+    <div style="font-size:0.78rem;color:var(--text-primary);line-height:1.6;background:rgba(255,255,255,0.03);padding:10px;border-radius:10px;border:1px solid rgba(80,160,255,0.08);">
+      ${planetRecommendation.comment}
+    </div>
+  `;
+  controlsEl.style.display = 'flex';
+}
+
+// ==========================================
 // 星座情報パネル
 // ==========================================
 
@@ -1533,10 +1667,44 @@ function initEvents() {
     constSelect.value = '';
   });
 
+  // 惑星追跡・自動追尾のイベントリスナー
+  const trackBtn = document.getElementById('btn-track-planet');
+  trackBtn?.addEventListener('click', () => {
+    if (planetRecommendation) {
+      activeTrackPlanet = planetRecommendation.name;
+      const targetP = planetsData.find(p => p.name === activeTrackPlanet);
+      if (targetP) {
+        guideTarget = { az: targetP.az, alt: Math.max(15, targetP.alt) };
+        isAutoRotatingToGuide = true;
+        showToast(`${planetRecommendation.name_ja} に視点を移動します`, 'info');
+      }
+    }
+  });
+
+  const lockCheckbox = document.getElementById('toggle-planet-lock') as HTMLInputElement;
+  lockCheckbox?.addEventListener('change', () => {
+    isPlanetLockOn = lockCheckbox.checked;
+    if (isPlanetLockOn && planetRecommendation) {
+      activeTrackPlanet = planetRecommendation.name;
+      // 追尾開始時はスムーズに向くようにする
+      const targetP = planetsData.find(p => p.name === activeTrackPlanet);
+      if (targetP) {
+        guideTarget = { az: targetP.az, alt: Math.max(15, targetP.alt) };
+        isAutoRotatingToGuide = true;
+      }
+      showToast(`${planetRecommendation.name_ja} の自動追尾を開始しました`, 'info');
+    } else {
+      showToast('自動追尾を停止しました', 'info');
+    }
+  });
+
   // ドラッグでカメラ回転
   webglCanvas.addEventListener('mousedown', (e) => {
     isDragging = true;
     isAutoRotatingToGuide = false; // 手動ドラッグ時に自動回転を即座にキャンセル
+    isPlanetLockOn = false; // 自動追尾もキャンセル
+    const lockCheckbox = document.getElementById('toggle-planet-lock') as HTMLInputElement;
+    if (lockCheckbox) lockCheckbox.checked = false;
     startMouseX = e.clientX; startMouseY = e.clientY;
     startAzimuth = viewAzimuth; startAltitude = viewAltitude;
   });
@@ -1558,6 +1726,9 @@ function initEvents() {
   webglCanvas.addEventListener('touchstart', (e) => {
     if (e.touches.length === 1) {
       isAutoRotatingToGuide = false; // タッチドラッグ開始時に自動追従を解除
+      isPlanetLockOn = false; // 自動追尾もキャンセル
+      const lockCheckbox = document.getElementById('toggle-planet-lock') as HTMLInputElement;
+      if (lockCheckbox) lockCheckbox.checked = false;
       lastTouchX = e.touches[0].clientX;
       lastTouchY = e.touches[0].clientY;
       startAzimuth = viewAzimuth;
@@ -1821,10 +1992,12 @@ async function refreshPlanetsAndDSO() {
     dsoData = skyData.deep_sky_objects || [];
     starsData = skyData.stars;
     constellationLinesData = skyData.constellation_lines;
+    planetRecommendation = skyData.recommendation || null;
 
     allocateConstellationBuffer();
     buildStarSprites();
     syncStarsToWorker();
+    updatePlanetTrackerUI();
   } catch (_) {
     // サイレントに失敗
   }
