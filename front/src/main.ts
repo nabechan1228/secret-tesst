@@ -4,6 +4,8 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
+
+
 // ==========================================
 // 型定義
 // ==========================================
@@ -17,11 +19,12 @@ interface StarData {
   color: string;
   az: number;
   alt: number;
+  name_ja?: string | null;
 }
 
 interface ConstellationSegment {
-  az1: number; alt1: number;
-  az2: number; alt2: number;
+  ra1: number; dec1: number;
+  ra2: number; dec2: number;
 }
 
 interface ConstellationLineData {
@@ -104,6 +107,7 @@ let constellationMesh: THREE.LineSegments;
 let milkyWayParticles: THREE.Points;
 let mountainMesh: THREE.Group;      // 山並みシルエット
 let atmosphereRing: THREE.Mesh;
+let celestialSphereGroup: THREE.Group; // 天球回転グループ
 
 let starsData: StarData[] = [];
 let constellationLinesData: ConstellationLineData[] = [];
@@ -114,8 +118,9 @@ let dsoData: DSOData[] = [];
 let planetsDsoLastUpdate = 0;
 const PLANETS_DSO_UPDATE_INTERVAL_MS = 30000;
 
-const MAX_CONST_SEGMENTS = 1500;
-const constellationPositions = new Float32Array(MAX_CONST_SEGMENTS * 2 * 3);
+let constellationPositions = new Float32Array(10002); // 初期サイズを十分に大きく（10002要素 = 1667セグメント、3の倍数）確保
+let starWorker: Worker | null = null;
+let isWorkerComputing = false;
 
 const DOME_RADIUS = 500;
 
@@ -123,17 +128,20 @@ const DOME_RADIUS = 500;
 // 奥行きレイヤー定数（視差効果のため距離を分離）
 // ==========================================
 const LAYER_MILKYWAY  = 900;  // 天の川（最奥）
-const LAYER_DIM       = 650;  // 暗い星 mag 4〜6
-const LAYER_MID       = 500;  // 中間 mag 2〜4
-const LAYER_BRIGHT    = 350;  // 明るい星 mag < 2
-const LAYER_CONSTEL   = 480;  // 星座線
+// WebWorker に移行されたためメインスレッド側では未使用
+// const LAYER_DIM       = 650;  // 暗い星 mag 4〜6
+// const LAYER_MID       = 500;  // 中間 mag 2〜4
+// const LAYER_BRIGHT    = 350;  // 明るい星 mag < 2
+// const LAYER_CONSTEL   = 480;  // 星座線
 
-/** 等級から配置半径を決定 */
+/** 等級から配置半径を決定
+    WebWorker に移行されたためメインスレッド側では未使用
 function starLayerRadius(mag: number): number {
   if (mag < 2.0)  return LAYER_BRIGHT;
   if (mag < 4.0)  return LAYER_MID;
   return LAYER_DIM;
 }
+*/
 
 /** 等級から指数関数的サイズを計算（光の強さを体感に近い形で表現） */
 function starVisualScale(mag: number): number {
@@ -290,7 +298,6 @@ function buildMilkyWay() {
   const COUNT = 8000;
   const positions = new Float32Array(COUNT * 3);
   const colors = new Float32Array(COUNT * 3);
-  const sizes = new Float32Array(COUNT);
 
   // 銀河面（銀緯0°付近、銀経0〜360°）に沿ってパーティクルを配置
   // 銀河面の傾き（赤道座標系における）を近似する
@@ -304,8 +311,6 @@ function buildMilkyWay() {
     // 銀河北極: RA=192.85°, Dec=27.13°, 銀河中心: RA=266.4°, Dec=-28.9°
     const sinB = Math.sin(galLat);
     const cosB = Math.cos(galLat);
-    const sinL = Math.sin(galLon);
-    const cosL = Math.cos(galLon);
 
     // 銀河座標系から赤道座標系への変換行列（J2000.0）
     // NGP: ra=192.8595°, dec=27.1284°
@@ -318,9 +323,12 @@ function buildMilkyWay() {
                    cosB * Math.cos(ngpDec) * Math.sin(galLon - (Math.PI / 2 - node));
     const dec = Math.asin(Math.max(-1, Math.min(1, sinDec)));
 
-    const cosRaMinusNgpRa = (cosB * Math.cos(galLon - (Math.PI / 2 - node))) / Math.cos(dec);
+    const cosDecVal = Math.cos(dec);
+    const safeCosDec = Math.abs(cosDecVal) < 1e-6 ? (cosDecVal < 0 ? -1e-6 : 1e-6) : cosDecVal;
+
+    const cosRaMinusNgpRa = (cosB * Math.cos(galLon - (Math.PI / 2 - node))) / safeCosDec;
     const sinRaMinusNgpRa = (cosB * Math.sin(ngpDec) * Math.sin(galLon - (Math.PI / 2 - node)) -
-                             sinB * Math.cos(ngpDec)) / Math.cos(dec);
+                             sinB * Math.cos(ngpDec)) / safeCosDec;
     const ra = (Math.atan2(sinRaMinusNgpRa, cosRaMinusNgpRa) + ngpRa + Math.PI * 2) % (Math.PI * 2);
 
     // 赤道座標→3D球面座標（天の川は最遠レイヤーへ配置）
@@ -336,26 +344,27 @@ function buildMilkyWay() {
     colors[i * 3 + 2] = 0.85 + (1 - t) * 0.15;
 
     // サイズ: 中心部に近い（ランダムで小〜大）
-    sizes[i] = 1.5 + Math.random() * 3.0;
   }
+
+
 
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  geo.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
 
   const mat = new THREE.PointsMaterial({
-    size: 2.5,
+    size: 3.5,
     map: createMilkyWayTexture(),
     vertexColors: true,
     transparent: true,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
-    opacity: 0.55,
-    sizeAttenuation: true,
+    opacity: 0.85,
+    sizeAttenuation: false,
   });
 
   milkyWayParticles = new THREE.Points(geo, mat);
+  milkyWayParticles.frustumCulled = false;
   scene.add(milkyWayParticles);
 }
 
@@ -597,6 +606,10 @@ function init3D() {
   zenithRing.position.y = DOME_RADIUS - 5;
   scene.add(zenithRing);
 
+  // ========== 天球回転グループ（すべての恒星・星座線・天の川を格納） ==========
+  celestialSphereGroup = new THREE.Group();
+  scene.add(celestialSphereGroup);
+
   // ========== 星座線 ==========
   const constGeo = new THREE.BufferGeometry();
   constGeo.setAttribute('position', new THREE.BufferAttribute(constellationPositions, 3));
@@ -645,12 +658,103 @@ async function loadFromAPI(): Promise<void> {
     if (statusEl) statusEl.textContent = `${starsData.length}星 / 感星${planetsData.length} / DSO${dsoData.length}天体`;
     console.log(`✓ API loaded: ${starsData.length} stars, ${constellationLinesData.length} constellations`);
 
+    allocateConstellationBuffer();
     buildStarSprites();
+    syncStarsToWorker();
 
   } catch (err) {
     console.error('API load failed:', err);
     if (statusEl) statusEl.textContent = 'APIエラー: バックエンドを起動してください';
     showToast('バックエンドAPIに接続できません。', 'error');
+  }
+}
+
+function initWorker() {
+  starWorker = new Worker(
+    new URL('./star-worker.ts', import.meta.url),
+    { type: 'module' }
+  );
+  
+  starWorker.onmessage = (e: MessageEvent) => {
+    const { type, coords, constellationCoords, validConstellationElements } = e.data;
+    if (type === 'result') {
+
+
+      updateStarSpritesFromBuffer(coords);
+      
+      if (showConstellations && constellationCoords && constellationMesh) {
+        if (validConstellationElements > constellationPositions.length) {
+          resizeConstellationBuffer(validConstellationElements);
+        }
+        constellationPositions.set(constellationCoords.subarray(0, validConstellationElements));
+        constellationMesh.geometry.setDrawRange(0, validConstellationElements / 3);
+        constellationMesh.geometry.attributes.position.needsUpdate = true;
+        constellationMesh.visible = true;
+      } else if (constellationMesh) {
+        constellationMesh.visible = false;
+      }
+
+      isWorkerComputing = false;
+    }
+  };
+}
+
+function updateStarSpritesFromBuffer(coords: Float32Array) {
+  const count = starsData.length;
+  const now = Date.now();
+  for (let i = 0; i < count; i++) {
+    const star = starsData[i];
+    const sprite = starObjects.get(star.id);
+    if (sprite) {
+      const idx = i * 4;
+      const x = coords[idx];
+      const y = coords[idx + 1];
+      const z = coords[idx + 2];
+      const isVisible = coords[idx + 3] === 1.0;
+      
+      sprite.position.set(x, y, z);
+      sprite.visible = isVisible;
+      
+      if (isVisible) {
+        let size = starVisualScale(star.mag);
+        if (star.mag < 3.0) {
+          const twinkle = 0.90 + 0.10 * Math.sin(now * 0.003 + star.id * 17.3);
+          size *= twinkle;
+        }
+        sprite.scale.set(size, size, 1);
+      }
+    }
+  }
+}
+
+function syncStarsToWorker() {
+  if (starWorker && starsData.length > 0) {
+
+    starWorker.postMessage({
+      type: 'init',
+      stars: starsData.map(s => ({ id: s.id, ra: s.ra, dec: s.dec, mag: s.mag })),
+      constellations: constellationLinesData
+    });
+  }
+}
+
+function allocateConstellationBuffer() {
+  const totalSegments = constellationLinesData.reduce((acc, c) => acc + c.segments.length, 0);
+  const requiredLength = totalSegments * 6; // 1セグメントあたり 2点 * 3次元 = 6要素
+  if (requiredLength > constellationPositions.length) {
+    resizeConstellationBuffer(requiredLength);
+  }
+}
+
+function resizeConstellationBuffer(newLength: number) {
+  // 3の倍数に切り上げ
+  const alignedLength = Math.ceil(newLength / 3) * 3;
+  console.warn(`Constellation buffer overflow! Resizing from ${constellationPositions.length} to ${alignedLength}`);
+  const newBuffer = new Float32Array(alignedLength);
+  newBuffer.set(constellationPositions);
+  constellationPositions = newBuffer;
+  if (constellationMesh && constellationMesh.geometry) {
+    constellationMesh.geometry.setAttribute('position', new THREE.BufferAttribute(constellationPositions, 3));
   }
 }
 
@@ -828,52 +932,28 @@ function updatePositionsAndRender() {
 
   const now = Date.now();
 
-  // 1. 各星の3D位置更新（奥行きレイヤー分離 → 視差効果）
-  starsData.forEach((star) => {
-    const hor = equatorialToHorizontal(star.ra, star.dec, lst, latitude);
-    // 等級に応じた配置半径：明るい星を手前に配置してパララックスを演出
-    const radius = starLayerRadius(star.mag);
-    const pos3d = horizonToCartesian(hor.az, hor.alt, radius);
-
-    const sprite = starObjects.get(star.id);
-    if (sprite) {
-      sprite.position.copy(pos3d);
-      sprite.visible = hor.alt >= -2;
-
-      // 指数関数的サイズ＋瞬き（明るい星のみ瞬き）
-      let size = starVisualScale(star.mag);
-      if (star.mag < 3.0) {
-        const twinkle = 0.90 + 0.10 * Math.sin(now * 0.003 + star.id * 17.3);
-        size *= twinkle;
-      }
-      sprite.scale.set(size, size, 1);
-    }
-  });
-
-  // 2. 星座線の更新（中間レイヤーに配置）
-  if (showConstellations && constellationLinesData.length > 0) {
-    let idx = 0;
-    constellationLinesData.forEach((constData) => {
-      constData.segments.forEach((seg) => {
-        if (idx + 6 > constellationPositions.length) return;
-        if (seg.alt1 < 0 || seg.alt2 < 0) return;
-
-        const p1 = horizonToCartesian(seg.az1, seg.alt1, LAYER_CONSTEL);
-        const p2 = horizonToCartesian(seg.az2, seg.alt2, LAYER_CONSTEL);
-
-        constellationPositions[idx++] = p1.x;
-        constellationPositions[idx++] = p1.y;
-        constellationPositions[idx++] = p1.z;
-        constellationPositions[idx++] = p2.x;
-        constellationPositions[idx++] = p2.y;
-        constellationPositions[idx++] = p2.z;
+  // 1. 各星 of 3D位置更新（WebWorker にオフロード）
+  if (starWorker && starsData.length > 0) {
+    if (!isWorkerComputing) {
+      isWorkerComputing = true;
+      starWorker.postMessage({
+        type: 'update',
+        lst,
+        latitude
       });
-    });
-    constellationMesh.geometry.setDrawRange(0, idx / 3);
-    constellationMesh.geometry.attributes.position.needsUpdate = true;
-    constellationMesh.visible = true;
-  } else {
-    constellationMesh.visible = false;
+    }
+  }
+
+  // 2. 星座線の更新（WebWorker側で計算・適用されるため、ここでは表示切替のみ）
+  if (constellationMesh) {
+    constellationMesh.visible = showConstellations && constellationLinesData.length > 0;
+  }
+
+  // 天の川の回転更新
+  if (milkyWayParticles) {
+    const q1 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), lst * Math.PI / 180.0);
+    const q2 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), (latitude - 90.0) * Math.PI / 180.0);
+    milkyWayParticles.quaternion.multiplyQuaternions(q2, q1);
   }
 
   // 3. カメラ向き更新
@@ -926,7 +1006,7 @@ function updatePositionsAndRender() {
       const scr = getScreenPosition(pos3d);
       if (!scr.visible) return;
 
-      const starName = BRIGHT_STAR_NAMES[star.id];
+      const starName = star.name_ja;
       if (!starName) return;
 
       const offset = Math.max(8, (6.5 - star.mag) * 3) + 6;
@@ -966,19 +1046,7 @@ function updatePositionsAndRender() {
   }
 }
 
-// HIP番号 → 星の日本語名
-const BRIGHT_STAR_NAMES: Record<number, string> = {
-  32349: 'シリウス', 30438: 'カノープス', 69673: 'アークトゥルス',
-  91262: 'ベガ', 24608: 'カペラ', 24436: 'リゲル',
-  37279: 'プロキオン', 27989: 'ベテルギウス', 97649: 'アルタイル',
-  21421: 'アルデバラン', 80763: 'アンタレス', 65474: 'スピカ',
-  37826: 'ポルックス', 102098: 'デネブ', 113368: 'フォーマルハウト',
-  49669: 'レグルス', 36850: 'カストル', 11767: 'ポラリス',
-  25336: 'ミルファク', 68702: 'ミザール', 62956: 'アリオト',
-  54061: 'ドゥーベ', 67301: 'アルカイド', 28380: 'ベラトリックス',
-  27366: 'サイフ', 26727: 'アルニタク', 26311: 'アルニラム',
-  25930: 'ミンタカ', 9884: 'アケルナル',
-};
+
 
 // ==========================================
 // 惑星描画
@@ -1371,6 +1439,7 @@ function updateTime() {
 }
 
 async function refreshPlanetsAndDSO() {
+  planetsDsoLastUpdate = Date.now();
   try {
     const skyRes = await fetch(
       `http://localhost:8000/api/sky?lat=${latitude}&lng=${longitude}&mag_limit=6.0`
@@ -1381,7 +1450,10 @@ async function refreshPlanetsAndDSO() {
     dsoData = skyData.deep_sky_objects || [];
     starsData = skyData.stars;
     constellationLinesData = skyData.constellation_lines;
-    planetsDsoLastUpdate = Date.now();
+
+    allocateConstellationBuffer();
+    buildStarSprites();
+    syncStarsToWorker();
   } catch (_) {
     // サイレントに失敗
   }
@@ -1406,6 +1478,7 @@ async function start() {
   // イントロ: カメラを地面近くから開始
   viewAltitude = 5;
 
+  initWorker();
   init3D();
   initEvents();
   await loadFromAPI();

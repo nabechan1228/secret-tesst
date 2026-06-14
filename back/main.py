@@ -126,6 +126,21 @@ def bv_to_color(bv: float) -> str:
         return "#ffcc6f"   # M型: 赤オレンジ
 
 
+# HIP番号 → 星の日本語名
+BRIGHT_STAR_NAMES = {
+    32349: 'シリウス', 30438: 'カノープス', 69673: 'アークトゥルス',
+    91262: 'ベガ', 24608: 'カペラ', 24436: 'リゲル',
+    37279: 'プロキオン', 27989: 'ベテルギウス', 97649: 'アルタイル',
+    21421: 'アルデバラン', 80763: 'アンタレス', 65474: 'スピカ',
+    37826: 'ポルックス', 102098: 'デネブ', 113368: 'フォーマルハウト',
+    49669: 'レグルス', 36850: 'カストル', 11767: 'ポラリス',
+    25336: 'ミルファク', 68702: 'ミザール', 62956: 'アリオト',
+    54061: 'ドゥーベ', 67301: 'アルカイド', 28380: 'ベラトリックス',
+    27366: 'サイフ', 26727: 'アルニタク', 26311: 'アルニラム',
+    25930: 'ミンタカ', 9884: 'アケルナル',
+}
+
+
 # ==========================================
 # API エンドポイント
 # ==========================================
@@ -174,6 +189,7 @@ def get_sky(
         
         visible_stars.append({
             "id": star['h'],        # HIP番号
+            "name_ja": BRIGHT_STAR_NAMES.get(star['h']), # 星の日本語名
             "ra": ra,
             "dec": dec,
             "mag": mag,
@@ -183,23 +199,16 @@ def get_sky(
             "alt": round(pos["alt"], 4),
         })
     
-    # --- 星座線データ (RA/Dec ベース・座標変換済み) ---
+    # --- 星座線データ (RA/Dec ベース) ---
     lines_raw = get_constellation_lines()
     constellation_lines_out = []
     for cid, segments in lines_raw.items():
         converted_segments = []
         for seg in segments:
             ra1, dec1, ra2, dec2 = seg
-            p1 = equatorial_to_horizontal(ra1, dec1, lst, lat)
-            p2 = equatorial_to_horizontal(ra2, dec2, lst, lat)
-            
-            # 両端の点がともに地平線の下に深く沈んでいる（-15度以下）場合は除外
-            if p1["alt"] < -15.0 and p2["alt"] < -15.0:
-                continue
-                
             converted_segments.append({
-                "az1": round(p1["az"], 3), "alt1": round(p1["alt"], 3),
-                "az2": round(p2["az"], 3), "alt2": round(p2["alt"], 3),
+                "ra1": ra1, "dec1": dec1,
+                "ra2": ra2, "dec2": dec2
             })
         constellation_lines_out.append({"cid": cid, "segments": converted_segments})
     
