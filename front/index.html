@@ -543,6 +543,31 @@
           </div>
         </div>
 
+        <!-- 星座ガイド -->
+        <div class="panel">
+          <div class="panel-title">Guide Mode</div>
+          <div class="control-group">
+            <div class="control-row">
+              <label for="guide-select">ガイド対象</label>
+              <select id="guide-select">
+                <option value="" selected>-- ガイドを選択 --</option>
+                <option value="summer-triangle">夏の大三角</option>
+                <option value="winter-triangle">冬の大三角</option>
+                <option value="spring-triangle">春の大三角</option>
+                <option value="big-dipper">北斗七星</option>
+                <option value="cassiopeia">カシオペヤ座 (W字)</option>
+              </select>
+            </div>
+            <!-- ガイド説明エリア -->
+            <div id="guide-description-panel" style="display:none;margin-top:10px;padding:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(80,160,255,0.12);border-radius:10px;">
+              <div id="guide-desc-name" style="font-weight:bold;color:var(--accent);font-size:0.85rem;margin-bottom:4px;"></div>
+              <div id="guide-desc-season" style="font-size:0.72rem;color:var(--gold);margin-bottom:6px;"></div>
+              <div id="guide-desc-text" style="font-size:0.75rem;color:var(--text-secondary);line-height:1.6;margin-bottom:8px;"></div>
+              <div id="guide-desc-stars" style="font-size:0.72rem;color:var(--text-muted);border-top:1px dashed var(--panel-border);padding-top:6px;"></div>
+            </div>
+          </div>
+        </div>
+
         <!-- 表示設定 -->
         <div class="panel">
           <div class="panel-title">Display Settings</div>
