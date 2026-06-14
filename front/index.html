@@ -568,6 +568,26 @@
           </div>
         </div>
 
+        <!-- 惑星追跡 (Planet Tracker) -->
+        <div class="panel">
+          <div class="panel-title">Planet Tracker</div>
+          <div class="control-group">
+            <div id="planet-tracker-info">
+              <div style="font-size:0.8rem;color:var(--text-secondary);">見頃な惑星を計算中...</div>
+            </div>
+            <div class="control-row" style="margin-top: 8px; display: none;" id="planet-tracker-controls">
+              <button id="btn-track-planet" class="btn btn-accent" style="flex:1;padding:6px;border-radius:6px;font-weight:bold;">
+                視点を移動
+              </button>
+              <label for="toggle-planet-lock" style="font-size:0.75rem;margin-left:8px;">自動追尾</label>
+              <label class="switch">
+                <input type="checkbox" id="toggle-planet-lock">
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
         <!-- 表示設定 -->
         <div class="panel">
           <div class="panel-title">Display Settings</div>
