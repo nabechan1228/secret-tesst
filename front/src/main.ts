@@ -62,6 +62,8 @@ interface DSOData {
   type: string;
   size: number;
   mag: number;
+  ra: number;
+  dec: number;
   az: number;
   alt: number;
 }
@@ -117,6 +119,14 @@ let dsoData: DSOData[] = [];
 
 let planetsDsoLastUpdate = 0;
 const PLANETS_DSO_UPDATE_INTERVAL_MS = 30000;
+const PLANETS_DSO_TIMELAPSE_UPDATE_INTERVAL_MS = 1500; // タイムラプス中は1.5秒ごとに更新
+
+// タイムラプス状態変数
+let isTimelapseActive = false;
+let timelapseStartTime = 0;
+let timelapseDuration = 0; // ms
+let timelapseStartSimTime = new Date();
+let timelapseEndSimTime = new Date();
 
 let constellationPositions = new Float32Array(10002); // 初期サイズを十分に大きく（10002要素 = 1667セグメント、3の倍数）確保
 let starWorker: Worker | null = null;
@@ -1056,7 +1066,7 @@ function updatePositionsAndRender() {
 
   // DSO描画
   if (showDSO && dsoData.length > 0) {
-    drawDSO();
+    drawDSO(lst);
   }
 }
 
@@ -1118,9 +1128,14 @@ function drawPlanets(lst: number) {
 // DSO（深宇宙天体）描画
 // ==========================================
 
-function drawDSO() {
+function drawDSO(lst: number) {
   dsoData.forEach((obj) => {
-    if (obj.alt < 0) return;
+    // フロント側で現在の地方恒星時と緯度からリアルタイム地平座標変換
+    const hor = equatorialToHorizontal(obj.ra, obj.dec, lst, latitude);
+    obj.az = hor.az;
+    obj.alt = hor.alt;
+
+    if (obj.alt < -15.0) return;
 
     const pos3d = horizonToCartesian(obj.az, obj.alt, DOME_RADIUS);
     const scr = getScreenPosition(pos3d);
@@ -1258,6 +1273,14 @@ function showToast(msg: string, type: 'info' | 'error' = 'info') {
 }
 
 // ==========================================
+// 日時フォーマット
+// ==========================================
+function formatDate(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+// ==========================================
 // イベントリスナー
 // ==========================================
 
@@ -1295,10 +1318,6 @@ function initEvents() {
     speedLabel.textContent = `${timeSpeed}x`;
   });
 
-  const formatDate = (d: Date) => {
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-  };
   dateInput.value = formatDate(currentDate);
 
   dateInput.addEventListener('blur', () => {
@@ -1380,6 +1399,17 @@ function initEvents() {
     camera.updateProjectionMatrix();
   }, { passive: false });
 
+  // タイムラプス操作
+  const timelapseToggleBtn = document.getElementById('btn-timelapse-toggle')!;
+  timelapseToggleBtn.addEventListener('click', () => {
+    if (isTimelapseActive) {
+      stopTimelapse();
+      showToast('タイムラプスを停止しました', 'info');
+    } else {
+      startTimelapse();
+    }
+  });
+
   // リサイズ対応
   const resizeViewport = () => {
     const container = document.getElementById('planetarium-viewport')!;
@@ -1441,13 +1471,91 @@ function populateConstellationSelect() {
 // 更新ループ
 // ==========================================
 
+function startTimelapse() {
+  const preset = (document.getElementById('timelapse-preset') as HTMLSelectElement).value;
+  
+  // 現在のシミュレーション時刻を開始時点とする
+  timelapseStartSimTime = new Date(currentDate.getTime());
+  
+  if (preset === 'sunset-to-sunrise') {
+    // タイムラプス当日の18:00から翌朝06:00までの12時間
+    timelapseStartSimTime.setHours(18, 0, 0, 0);
+    timelapseEndSimTime = new Date(timelapseStartSimTime.getTime() + 12 * 60 * 60 * 1000);
+    timelapseDuration = 30000; // 30秒
+  } else if (preset === '24hours') {
+    timelapseEndSimTime = new Date(timelapseStartSimTime.getTime() + 24 * 60 * 60 * 1000);
+    timelapseDuration = 30000; // 30秒
+  } else if (preset === '1year') {
+    timelapseEndSimTime = new Date(timelapseStartSimTime.getTime() + 365 * 24 * 60 * 60 * 1000);
+    timelapseDuration = 60000; // 60秒
+  }
+
+  currentDate = new Date(timelapseStartSimTime.getTime());
+  timelapseStartTime = Date.now();
+  isTimelapseActive = true;
+
+  // UI状態の更新
+  const toggleBtn = document.getElementById('btn-timelapse-toggle')!;
+  toggleBtn.textContent = 'タイムラプス停止';
+  toggleBtn.className = 'btn btn-danger';
+  
+  document.getElementById('timelapse-progress-container')!.style.display = 'block';
+  
+  // 通常時間操作UIを無効化
+  (document.getElementById('toggle-time-flow') as HTMLInputElement).disabled = true;
+  (document.getElementById('time-speed') as HTMLInputElement).disabled = true;
+  (document.getElementById('input-date') as HTMLInputElement).disabled = true;
+
+  showToast('タイムラプスを開始しました', 'info');
+  
+  // 開始時に即座に天体座標同期
+  refreshPlanetsAndDSO();
+}
+
+function stopTimelapse() {
+  isTimelapseActive = false;
+  
+  const toggleBtn = document.getElementById('btn-timelapse-toggle')!;
+  toggleBtn.textContent = 'タイムラプス開始';
+  toggleBtn.className = 'btn btn-accent';
+  
+  document.getElementById('timelapse-progress-container')!.style.display = 'none';
+
+  // 時間操作UIを有効化
+  (document.getElementById('toggle-time-flow') as HTMLInputElement).disabled = false;
+  (document.getElementById('time-speed') as HTMLInputElement).disabled = false;
+  (document.getElementById('input-date') as HTMLInputElement).disabled = false;
+}
+
 function updateTime() {
-  if (isTimeFlowing) {
+  if (isTimelapseActive) {
+    const elapsed = Date.now() - timelapseStartTime;
+    const progress = Math.min(elapsed / timelapseDuration, 1.0);
+
+    const startMs = timelapseStartSimTime.getTime();
+    const endMs = timelapseEndSimTime.getTime();
+    currentDate = new Date(startMs + (endMs - startMs) * progress);
+
+    // プログレス表示更新
+    const progressBar = document.getElementById('timelapse-progress-bar');
+    const progressText = document.getElementById('timelapse-progress-text');
+    if (progressBar) progressBar.style.width = `${progress * 100}%`;
+    if (progressText) progressText.textContent = `${Math.round(progress * 100)}%`;
+
+    const dateInput = document.getElementById('input-date') as HTMLInputElement;
+    if (dateInput && document.activeElement !== dateInput) {
+      dateInput.value = formatDate(currentDate);
+    }
+
+    if (progress >= 1.0) {
+      stopTimelapse();
+      showToast('タイムラプスが完了しました', 'info');
+    }
+  } else if (isTimeFlowing) {
     currentDate = new Date(currentDate.getTime() + 16.7 * timeSpeed);
     const dateInput = document.getElementById('input-date') as HTMLInputElement;
-    if (document.activeElement !== dateInput) {
-      const pad = (n: number) => String(n).padStart(2, '0');
-      dateInput.value = `${currentDate.getFullYear()}-${pad(currentDate.getMonth()+1)}-${pad(currentDate.getDate())} ${pad(currentDate.getHours())}:${pad(currentDate.getMinutes())}:${pad(currentDate.getSeconds())}`;
+    if (dateInput && document.activeElement !== dateInput) {
+      dateInput.value = formatDate(currentDate);
     }
   }
 }
@@ -1476,7 +1584,8 @@ async function refreshPlanetsAndDSO() {
 function tick() {
   updateTime();
 
-  if (Date.now() - planetsDsoLastUpdate > PLANETS_DSO_UPDATE_INTERVAL_MS) {
+  const interval = isTimelapseActive ? PLANETS_DSO_TIMELAPSE_UPDATE_INTERVAL_MS : PLANETS_DSO_UPDATE_INTERVAL_MS;
+  if (Date.now() - planetsDsoLastUpdate > interval) {
     refreshPlanetsAndDSO();
   }
 

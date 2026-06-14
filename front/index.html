@@ -380,6 +380,40 @@
       }
       #close-const-panel:hover { color: var(--text-primary); }
 
+      /* ============ ボタン共通 ============ */
+      .btn {
+        font-family: inherit;
+        font-size: 0.82rem;
+        cursor: pointer;
+        border: none;
+        transition: background 0.2s, box-shadow 0.2s, transform 0.1s;
+        outline: none;
+      }
+      .btn-accent {
+        background: var(--accent);
+        color: #fff;
+        box-shadow: 0 4px 12px var(--accent-dim);
+      }
+      .btn-accent:hover {
+        background: #00acc1;
+        box-shadow: 0 6px 16px var(--accent-glow);
+      }
+      .btn-accent:active {
+        transform: translateY(1px);
+      }
+      .btn-danger {
+        background: var(--danger);
+        color: #fff;
+        box-shadow: 0 4px 12px rgba(255,71,87,0.2);
+      }
+      .btn-danger:hover {
+        background: #ff3838;
+        box-shadow: 0 6px 16px rgba(255,71,87,0.4);
+      }
+      .btn-danger:active {
+        transform: translateY(1px);
+      }
+
       /* ============ トースト ============ */
       #toast {
         position: absolute;
@@ -479,6 +513,33 @@
               <span id="speed-label" style="font-size:0.8rem;color:var(--accent);min-width:36px;text-align:right;">1x</span>
             </div>
             <input type="range" id="time-speed" min="1" max="2000" value="1" step="1">
+          </div>
+        </div>
+
+        <!-- タイムラプス -->
+        <div class="panel">
+          <div class="panel-title">Timelapse</div>
+          <div class="control-group">
+            <div class="control-row">
+              <label for="timelapse-preset">プリセット</label>
+              <select id="timelapse-preset">
+                <option value="sunset-to-sunrise" selected>日没 〜 夜明け (30秒)</option>
+                <option value="24hours">24時間 (30秒)</option>
+                <option value="1year">1年間 (60秒)</option>
+              </select>
+            </div>
+            <button id="btn-timelapse-toggle" class="btn btn-accent" style="width:100%;padding:8px;border-radius:8px;font-weight:bold;margin-top:6px;">
+              タイムラプス開始
+            </button>
+            <div id="timelapse-progress-container" style="display:none;margin-top:8px;">
+              <div style="display:flex;justify-content:space-between;font-size:0.72rem;color:var(--text-secondary);margin-bottom:4px;">
+                <span>再生中...</span>
+                <span id="timelapse-progress-text">0%</span>
+              </div>
+              <div style="width:100%;height:4px;background:rgba(255,255,255,0.1);border-radius:2px;overflow:hidden;">
+                <div id="timelapse-progress-bar" style="width:0%;height:100%;background:var(--accent);box-shadow:0 0 6px var(--accent-glow);"></div>
+              </div>
+            </div>
           </div>
         </div>
 
