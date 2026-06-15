@@ -1108,18 +1108,35 @@ function updatePositionsAndRender() {
       isAutoRotatingToGuide = false;
     }
   } else if (isPlanetLockOn && activeTrackPlanet) {
+    // 描画と同じ LST でリアルタイム計算した座標を追尾ターゲットとして使用する。
+    // サーバー提供の az/alt は更新間隔や時刻ズレで誤差が生じるため使わない。
     let targetAz: number | null = null;
     let targetAlt: number | null = null;
 
     const trackP = planetsData.find(p => p.name === activeTrackPlanet);
     if (trackP) {
-      targetAz = trackP.az;
-      targetAlt = trackP.alt;
+      // フロントエンドの現在 LST で再計算
+      const hor = equatorialToHorizontal(trackP.ra, trackP.dec, lst, latitude);
+      targetAz = hor.az;
+      targetAlt = hor.alt;
     } else {
+      // DSO: dsoData に ra/dec が含まれていれば再計算、なければ固定座標から計算
       const trackD = dsoData.find(d => d.id === activeTrackPlanet);
       if (trackD) {
-        targetAz = trackD.az;
-        targetAlt = trackD.alt;
+        const hor = equatorialToHorizontal(trackD.ra, trackD.dec, lst, latitude);
+        targetAz = hor.az;
+        targetAlt = hor.alt;
+      } else {
+        // M31/M42/M45 など DSO リストに無い場合のフォールバック
+        let ra = 0, dec = 0;
+        if (activeTrackPlanet === 'M31') { ra = 0.7122; dec = 41.2692; }
+        else if (activeTrackPlanet === 'M42') { ra = 5.5883; dec = -5.39; }
+        else if (activeTrackPlanet === 'M45') { ra = 3.7883; dec = 24.1167; }
+        if (ra !== 0) {
+          const hor = equatorialToHorizontal(ra, dec, lst, latitude);
+          targetAz = hor.az;
+          targetAlt = hor.alt;
+        }
       }
     }
 
@@ -1923,15 +1940,21 @@ function initEvents() {
     let targetAz: number | null = null;
     let targetAlt: number | null = null;
 
+    // 初期ジャンプ先もフロントエンドの現在時刻で計算した座標を使う
+    const initJd = getJulianDate(currentDate);
+    const initLst = getLocalSiderealTime(initJd, longitude);
+
     const trackP = planetsData.find(p => p.name === target);
     if (trackP) {
-      targetAz = trackP.az;
-      targetAlt = trackP.alt;
+      const hor = equatorialToHorizontal(trackP.ra, trackP.dec, initLst, latitude);
+      targetAz = hor.az;
+      targetAlt = hor.alt;
     } else {
       const trackD = dsoData.find(d => d.id === target);
       if (trackD) {
-        targetAz = trackD.az;
-        targetAlt = trackD.alt;
+        const hor = equatorialToHorizontal(trackD.ra, trackD.dec, initLst, latitude);
+        targetAz = hor.az;
+        targetAlt = hor.alt;
       } else {
         let ra = 0, dec = 0;
         if (target === 'M31') { ra = 0.7122; dec = 41.2692; }
@@ -1939,9 +1962,7 @@ function initEvents() {
         else if (target === 'M45') { ra = 3.7883; dec = 24.1167; }
         
         if (ra !== 0) {
-          const jd = getJulianDate(currentDate);
-          const lst = getLocalSiderealTime(jd, longitude);
-          const hor = equatorialToHorizontal(ra, dec, lst, latitude);
+          const hor = equatorialToHorizontal(ra, dec, initLst, latitude);
           targetAz = hor.az;
           targetAlt = hor.alt;
         }
