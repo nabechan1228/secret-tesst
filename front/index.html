@@ -600,6 +600,24 @@
                 <option value="telescope">望遠鏡 (中倍率・レチクル)</option>
               </select>
             </div>
+            <div class="control-row" style="margin-top: 8px;">
+              <label for="obs-target-select">天体ターゲット</label>
+              <select id="obs-target-select">
+                <option value="none" selected>-- ターゲットなし --</option>
+                <optgroup label="主要天体">
+                  <option value="Moon">月 (Moon)</option>
+                  <option value="Jupiter">木星 (Jupiter)</option>
+                  <option value="Saturn">土星 (Saturn)</option>
+                  <option value="Venus">金星 (Venus)</option>
+                  <option value="Mars">火星 (Mars)</option>
+                </optgroup>
+                <optgroup label="深宇宙天体 (DSO)">
+                  <option value="M31">アンドロメダ銀河 (M31)</option>
+                  <option value="M42">オリオン大星雲 (M42)</option>
+                  <option value="M45">プレアデス星団 (M45 / すばる)</option>
+                </optgroup>
+              </select>
+            </div>
             <div id="obs-mode-details" style="display:none;margin-top:10px;padding:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(80,160,255,0.12);border-radius:10px;font-size:0.75rem;line-height:1.6;color:var(--text-secondary);">
               <span id="obs-mode-desc"></span>
             </div>

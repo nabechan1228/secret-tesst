@@ -98,6 +98,7 @@ let viewAzimuth = 180;
 let viewAltitude = 45;
 let baseFov = 85; // 超広角（人間の視野に近い85°）
 let observationMode: 'none' | 'binoculars' | 'telescope' = 'none';
+const dsoPhotoObjects: Map<string, THREE.Sprite> = new Map();
 
 let showConstellations = true;
 let showStarNames = true;
@@ -715,6 +716,7 @@ function init3D() {
 
   // ========== 天の川 ==========
   buildMilkyWay();
+  buildDsoPhotos();
 }
 
 // ==========================================
@@ -797,6 +799,29 @@ function initWorker() {
 function updateStarSpritesFromBuffer(coords: Float32Array) {
   const count = starsData.length;
   const now = Date.now();
+
+  // ターゲット天体の位置を取得
+  let targetRa = -1;
+  let targetDec = -100;
+  if (activeTrackPlanet && observationMode !== 'none') {
+    const trackP = planetsData.find(p => p.name === activeTrackPlanet);
+    if (trackP) {
+      targetRa = trackP.ra;
+      targetDec = trackP.dec;
+    } else {
+      const dsoConfigs = [
+        { id: 'M31', ra: 0.7122, dec: 41.2692 },
+        { id: 'M42', ra: 5.5883, dec: -5.39 },
+        { id: 'M45', ra: 3.7883, dec: 24.1167 }
+      ];
+      const trackD = dsoConfigs.find(d => d.id === activeTrackPlanet);
+      if (trackD) {
+        targetRa = trackD.ra;
+        targetDec = trackD.dec;
+      }
+    }
+  }
+
   for (let i = 0; i < count; i++) {
     const star = starsData[i];
     const sprite = starObjects.get(star.id);
@@ -805,8 +830,20 @@ function updateStarSpritesFromBuffer(coords: Float32Array) {
       const x = coords[idx];
       const y = coords[idx + 1];
       const z = coords[idx + 2];
-      const isVisible = coords[idx + 3] === 1.0;
+      let isVisible = coords[idx + 3] === 1.0;
       
+      // ターゲット天体の近くにある背景恒星を一時的に非表示にする
+      if (isVisible && targetRa !== -1) {
+        const dDec = star.dec - targetDec;
+        let dRa = (star.ra - targetRa) * 15.0; // 時間 -> 度
+        if (dRa > 180.0) dRa -= 360.0;
+        if (dRa < -180.0) dRa += 360.0;
+        const dist = Math.sqrt(dRa * dRa + dDec * dDec);
+        if (dist < 2.2) {
+          isVisible = false;
+        }
+      }
+
       sprite.position.set(x, y, z);
       sprite.visible = isVisible;
       
@@ -1071,13 +1108,27 @@ function updatePositionsAndRender() {
       isAutoRotatingToGuide = false;
     }
   } else if (isPlanetLockOn && activeTrackPlanet) {
+    let targetAz: number | null = null;
+    let targetAlt: number | null = null;
+
     const trackP = planetsData.find(p => p.name === activeTrackPlanet);
     if (trackP) {
-      let diffAz = trackP.az - viewAzimuth;
+      targetAz = trackP.az;
+      targetAlt = trackP.alt;
+    } else {
+      const trackD = dsoData.find(d => d.id === activeTrackPlanet);
+      if (trackD) {
+        targetAz = trackD.az;
+        targetAlt = trackD.alt;
+      }
+    }
+
+    if (targetAz !== null && targetAlt !== null) {
+      let diffAz = targetAz - viewAzimuth;
       if (diffAz > 180) diffAz -= 360;
       if (diffAz < -180) diffAz += 360;
 
-      const diffAlt = trackP.alt - viewAltitude;
+      const diffAlt = targetAlt - viewAltitude;
 
       // 自動追尾中はスムーズに追従 (イージング係数 0.08)
       viewAzimuth = (viewAzimuth + diffAz * 0.08 + 360) % 360;
@@ -1179,6 +1230,9 @@ function updatePositionsAndRender() {
     drawAsterismGuide(lst);
   }
 
+  // 天体写真 (DSO/月) の 3D位置とフェード更新
+  updateDsoPhotos(lst);
+
   // 観測モードの視野マスク・レチクル描画
   drawObservationMask(w, h);
 }
@@ -1193,6 +1247,11 @@ function drawPlanets(lst: number) {
   planetsData.forEach((planet) => {
     const hor = equatorialToHorizontal(planet.ra, planet.dec, lst, latitude);
     if (hor.alt < 0) return;
+
+    // 現在ターゲット指定され観測モード中の天体は2D惑星マークの描画をスキップする
+    if (activeTrackPlanet === planet.name && observationMode !== 'none') {
+      return;
+    }
 
     const pos3d = horizonToCartesian(hor.az, hor.alt, DOME_RADIUS);
     const scr = getScreenPosition(pos3d);
@@ -1320,6 +1379,11 @@ function drawDSO(lst: number) {
     obj.alt = hor.alt;
 
     if (obj.alt < -15.0) return;
+
+    // 現在ターゲット指定され観測モード中の天体は2Dマークの描画をスキップする
+    if (activeTrackPlanet === obj.id && observationMode !== 'none') {
+      return;
+    }
 
     const pos3d = horizonToCartesian(obj.az, obj.alt, DOME_RADIUS);
     const scr = getScreenPosition(pos3d);
@@ -1612,6 +1676,109 @@ function drawObservationMask(w: number, h: number) {
   ctx2d.restore();
 }
 
+function buildDsoPhotos() {
+  const loader = new THREE.TextureLoader();
+  const dsoConfigs = [
+    { id: 'M31', file: 'm31.png', ra: 0.7122, dec: 41.2692, scale: 30.0 },
+    { id: 'M42', file: 'm42.png', ra: 5.5883, dec: -5.39, scale: 16.0 },
+    { id: 'M45', file: 'm45.png', ra: 3.7883, dec: 24.1167, scale: 26.0 },
+    { id: 'Moon', file: 'moon.png', ra: 0, dec: 0, scale: 8.7 },
+    { id: 'Jupiter', file: 'jupiter.png', ra: 0, dec: 0, scale: 5.0 },
+    { id: 'Saturn', file: 'saturn.png', ra: 0, dec: 0, scale: 5.0 },
+    { id: 'Venus', file: 'venus.png', ra: 0, dec: 0, scale: 3.5 },
+    { id: 'Mars', file: 'mars.png', ra: 0, dec: 0, scale: 3.5 }
+  ];
+
+  dsoConfigs.forEach(cfg => {
+    loader.load(`/assets/${cfg.file}`, (texture) => {
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const material = new THREE.SpriteMaterial({
+        map: texture,
+        transparent: true,
+        blending: THREE.NormalBlending, // NormalBlending にして背景の星を遮蔽する
+        depthWrite: false,
+        opacity: 0.0
+      });
+      const sprite = new THREE.Sprite(material);
+      sprite.scale.set(cfg.scale, cfg.scale, 1);
+      sprite.visible = false;
+      scene.add(sprite);
+      dsoPhotoObjects.set(cfg.id, sprite);
+      console.log(`✓ Loaded astrophotography: ${cfg.id}`);
+    }, undefined, (err) => {
+      console.error(`Failed to load astrophotography asset: ${cfg.file}`, err);
+    });
+  });
+}
+
+function updateDsoPhotos(lst: number) {
+  const fov = camera.fov;
+  let maxOpacity = 0.0;
+  if (observationMode === 'binoculars') {
+    maxOpacity = Math.max(0.0, Math.min(0.5, (15.0 - fov) / 10.0));
+  } else if (observationMode === 'telescope') {
+    maxOpacity = Math.max(0.0, Math.min(1.0, (15.0 - fov) / 10.0));
+  }
+
+  // 1. 月の更新
+  const moonSprite = dsoPhotoObjects.get('Moon');
+  if (moonSprite) {
+    const isTarget = activeTrackPlanet === 'Moon';
+    const moonData = planetsData.find(p => p.name === 'Moon');
+    if (moonData && moonData.alt >= -5.0 && isTarget) {
+      const hor = equatorialToHorizontal(moonData.ra, moonData.dec, lst, latitude);
+      const pos3d = horizonToCartesian(hor.az, hor.alt, DOME_RADIUS - 10);
+      moonSprite.position.copy(pos3d);
+      moonSprite.visible = hor.alt >= 0 && maxOpacity > 0.05;
+      (moonSprite.material as THREE.SpriteMaterial).opacity = maxOpacity;
+    } else {
+      moonSprite.visible = false;
+    }
+  }
+
+  // 2. 惑星の更新 (木星、土星、金星、火星)
+  const planetsToUpdate = ['Jupiter', 'Saturn', 'Venus', 'Mars'];
+  planetsToUpdate.forEach(pid => {
+    const sprite = dsoPhotoObjects.get(pid);
+    if (sprite) {
+      const isTarget = activeTrackPlanet === pid;
+      const pData = planetsData.find(p => p.name === pid);
+      if (pData && pData.alt >= -5.0 && isTarget) {
+        const hor = equatorialToHorizontal(pData.ra, pData.dec, lst, latitude);
+        const pos3d = horizonToCartesian(hor.az, hor.alt, DOME_RADIUS - 10);
+        sprite.position.copy(pos3d);
+        sprite.visible = hor.alt >= 0 && maxOpacity > 0.05;
+        (sprite.material as THREE.SpriteMaterial).opacity = maxOpacity;
+      } else {
+        sprite.visible = false;
+      }
+    }
+  });
+
+  // 3. DSO天体の更新
+  const dsoConfigs = [
+    { id: 'M31', ra: 0.7122, dec: 41.2692 },
+    { id: 'M42', ra: 5.5883, dec: -5.39 },
+    { id: 'M45', ra: 3.7883, dec: 24.1167 }
+  ];
+
+  dsoConfigs.forEach(cfg => {
+    const sprite = dsoPhotoObjects.get(cfg.id);
+    if (sprite) {
+      const isTarget = activeTrackPlanet === cfg.id;
+      if (isTarget) {
+        const hor = equatorialToHorizontal(cfg.ra, cfg.dec, lst, latitude);
+        const pos3d = horizonToCartesian(hor.az, hor.alt, DOME_RADIUS - 15);
+        sprite.position.copy(pos3d);
+        sprite.visible = hor.alt >= 0 && maxOpacity > 0.05;
+        (sprite.material as THREE.SpriteMaterial).opacity = maxOpacity;
+      } else {
+        sprite.visible = false;
+      }
+    }
+  });
+}
+
 // ==========================================
 // 惑星見頃・追跡UI更新
 // ==========================================
@@ -1736,9 +1903,85 @@ function initEvents() {
     if (!isNaN(parsed)) currentDate = new Date(parsed);
   });
 
+  const obsTargetSelect = document.getElementById('obs-target-select') as HTMLSelectElement;
   const obsModeSelect = document.getElementById('obs-mode-select') as HTMLSelectElement;
   const obsModeDetails = document.getElementById('obs-mode-details')!;
   const obsModeDesc = document.getElementById('obs-mode-desc')!;
+
+  obsTargetSelect.addEventListener('change', () => {
+    const target = obsTargetSelect.value;
+    if (target === 'none') {
+      activeTrackPlanet = null;
+      isPlanetLockOn = false;
+      const lockCheckbox = document.getElementById('toggle-planet-lock') as HTMLInputElement;
+      if (lockCheckbox) lockCheckbox.checked = false;
+      showToast('追尾を解除しました', 'info');
+      return;
+    }
+
+    activeTrackPlanet = target;
+    let targetAz: number | null = null;
+    let targetAlt: number | null = null;
+
+    const trackP = planetsData.find(p => p.name === target);
+    if (trackP) {
+      targetAz = trackP.az;
+      targetAlt = trackP.alt;
+    } else {
+      const trackD = dsoData.find(d => d.id === target);
+      if (trackD) {
+        targetAz = trackD.az;
+        targetAlt = trackD.alt;
+      } else {
+        let ra = 0, dec = 0;
+        if (target === 'M31') { ra = 0.7122; dec = 41.2692; }
+        else if (target === 'M42') { ra = 5.5883; dec = -5.39; }
+        else if (target === 'M45') { ra = 3.7883; dec = 24.1167; }
+        
+        if (ra !== 0) {
+          const jd = getJulianDate(currentDate);
+          const lst = getLocalSiderealTime(jd, longitude);
+          const hor = equatorialToHorizontal(ra, dec, lst, latitude);
+          targetAz = hor.az;
+          targetAlt = hor.alt;
+        }
+      }
+    }
+
+    if (targetAz !== null && targetAlt !== null) {
+      guideTarget = { az: targetAz, alt: Math.max(12, targetAlt) };
+      isAutoRotatingToGuide = true;
+
+      observationMode = 'telescope';
+      if (obsModeSelect) obsModeSelect.value = 'telescope';
+      
+      camera.fov = 1.0;
+      camera.updateProjectionMatrix();
+      
+      obsModeDesc.innerHTML = `
+        <strong>望遠鏡シミュレーション (中倍率・レチクル)</strong><br>
+        ・口径: 200mm / 焦点距離: 1000mm (F5)<br>
+        ・実視野 (TFOV): 1.0° (レチクル照準付き)<br>
+        ・ズーム制限: 0.2° 〜 4.0° (ホイール操作可)<br>
+        <span style="color:var(--text-secondary); opacity: 0.8; font-size: 0.72rem;">月、惑星の表面、遠方の星雲・星団（DSO）をクローズアップして観測できます。</span>
+      `;
+      obsModeDetails.style.display = 'block';
+
+      isPlanetLockOn = true;
+      const lockCheckbox = document.getElementById('toggle-planet-lock') as HTMLInputElement;
+      if (lockCheckbox) lockCheckbox.checked = true;
+
+      const targetNameJa = target === 'Moon' ? '月' : 
+                           target === 'M31' ? 'アンドロメダ銀河' :
+                           target === 'M42' ? 'オリオン大星雲' :
+                           target === 'M45' ? 'プレアデス星団' :
+                           trackP ? trackP.name_ja : target;
+      
+      showToast(`${targetNameJa} へ自動導入し、自動追尾を開始します`, 'info');
+    } else {
+      showToast('ターゲットの位置を計算できませんでした。', 'error');
+    }
+  });
 
   obsModeSelect.addEventListener('change', () => {
     const val = obsModeSelect.value as 'none' | 'binoculars' | 'telescope';
@@ -1748,6 +1991,14 @@ function initEvents() {
       camera.fov = baseFov;
       camera.updateProjectionMatrix();
       obsModeDetails.style.display = 'none';
+      
+      // 通常モードに戻した際はターゲット選択と自動追尾も解除する
+      obsTargetSelect.value = 'none';
+      activeTrackPlanet = null;
+      isPlanetLockOn = false;
+      const lockCheckbox = document.getElementById('toggle-planet-lock') as HTMLInputElement;
+      if (lockCheckbox) lockCheckbox.checked = false;
+
       showToast('通常モード (肉眼・広角) に戻しました', 'info');
     } else if (val === 'binoculars') {
       camera.fov = 7.5;
@@ -1827,6 +2078,9 @@ function initEvents() {
       showToast(`${planetRecommendation.name_ja} の自動追尾を開始しました`, 'info');
     } else {
       showToast('自動追尾を停止しました', 'info');
+      const obsTargetSelect = document.getElementById('obs-target-select') as HTMLSelectElement;
+      if (obsTargetSelect) obsTargetSelect.value = 'none';
+      activeTrackPlanet = null;
     }
   });
 
@@ -1837,6 +2091,9 @@ function initEvents() {
     isPlanetLockOn = false; // 自動追尾もキャンセル
     const lockCheckbox = document.getElementById('toggle-planet-lock') as HTMLInputElement;
     if (lockCheckbox) lockCheckbox.checked = false;
+    const obsTargetSelect = document.getElementById('obs-target-select') as HTMLSelectElement;
+    if (obsTargetSelect) obsTargetSelect.value = 'none';
+    activeTrackPlanet = null;
     startMouseX = e.clientX; startMouseY = e.clientY;
     startAzimuth = viewAzimuth; startAltitude = viewAltitude;
   });
@@ -1861,6 +2118,9 @@ function initEvents() {
       isPlanetLockOn = false; // 自動追尾もキャンセル
       const lockCheckbox = document.getElementById('toggle-planet-lock') as HTMLInputElement;
       if (lockCheckbox) lockCheckbox.checked = false;
+      const obsTargetSelect = document.getElementById('obs-target-select') as HTMLSelectElement;
+      if (obsTargetSelect) obsTargetSelect.value = 'none';
+      activeTrackPlanet = null;
       lastTouchX = e.touches[0].clientX;
       lastTouchY = e.touches[0].clientY;
       startAzimuth = viewAzimuth;
