@@ -97,6 +97,7 @@ let timeSpeed = 1;
 let viewAzimuth = 180;
 let viewAltitude = 45;
 let baseFov = 85; // 超広角（人間の視野に近い85°）
+let observationMode: 'none' | 'binoculars' | 'telescope' = 'none';
 
 let showConstellations = true;
 let showStarNames = true;
@@ -1177,6 +1178,9 @@ function updatePositionsAndRender() {
   if (activeGuideId) {
     drawAsterismGuide(lst);
   }
+
+  // 観測モードの視野マスク・レチクル描画
+  drawObservationMask(w, h);
 }
 
 
@@ -1520,6 +1524,94 @@ function drawAsterismGuide(lst: number) {
   ctx2d.restore();
 }
 
+function drawObservationMask(w: number, h: number) {
+  if (observationMode === 'none') return;
+
+  const cx = w / 2;
+  const cy = h / 2;
+  const radius = Math.min(w, h) * 0.41;
+
+  ctx2d.save();
+
+  // 1. マスク領域を描画（外側を黒く塗りつぶす）
+  ctx2d.beginPath();
+  ctx2d.rect(0, 0, w, h);
+  ctx2d.arc(cx, cy, radius, 0, Math.PI * 2, true);
+  ctx2d.fillStyle = 'rgba(2, 3, 10, 0.98)';
+  ctx2d.fill();
+
+  // 2. 円の境界にケラレ（ソフトなボケ）をグラデーションで描画
+  const grad = ctx2d.createRadialGradient(cx, cy, radius - 20, cx, cy, radius + 2);
+  grad.addColorStop(0, 'rgba(2, 3, 10, 0)');
+  grad.addColorStop(0.5, 'rgba(2, 3, 10, 0.4)');
+  grad.addColorStop(1, 'rgba(2, 3, 10, 0.98)');
+  
+  ctx2d.beginPath();
+  ctx2d.arc(cx, cy, radius + 5, 0, Math.PI * 2);
+  ctx2d.fillStyle = grad;
+  ctx2d.fill();
+
+  // 3. アイピースの内枠線を描画（金属反射の表現）
+  ctx2d.strokeStyle = 'rgba(80, 100, 140, 0.25)';
+  ctx2d.lineWidth = 2.0;
+  ctx2d.beginPath();
+  ctx2d.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx2d.stroke();
+
+  // 4. モード固有のレチクルや情報を描画
+  if (observationMode === 'binoculars') {
+    ctx2d.font = "11px 'Courier New', monospace";
+    ctx2d.fillStyle = 'rgba(0, 188, 212, 0.6)';
+    ctx2d.textAlign = 'center';
+    ctx2d.textBaseline = 'bottom';
+    const tfov = camera.fov.toFixed(1);
+    ctx2d.fillText(`BINOCULARS 7x50 | TFOV: ${tfov}°`, cx, cy + radius - 15);
+  } else if (observationMode === 'telescope') {
+    ctx2d.strokeStyle = 'rgba(255, 71, 87, 0.35)';
+    ctx2d.lineWidth = 1.0;
+
+    const circles = [radius * 0.12, radius * 0.35, radius * 0.65];
+    circles.forEach(r => {
+      ctx2d.beginPath();
+      ctx2d.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx2d.stroke();
+    });
+
+    const innerGap = 8;
+    ctx2d.beginPath();
+    ctx2d.moveTo(cx - radius, cy);
+    ctx2d.lineTo(cx - innerGap, cy);
+    ctx2d.moveTo(cx + innerGap, cy);
+    ctx2d.lineTo(cx + radius, cy);
+    ctx2d.moveTo(cx, cy - radius);
+    ctx2d.lineTo(cx, cy - innerGap);
+    ctx2d.moveTo(cx, cy + innerGap);
+    ctx2d.lineTo(cx, cy + radius);
+    ctx2d.stroke();
+
+    const tickCount = 10;
+    const tickSpacing = radius / tickCount;
+    ctx2d.lineWidth = 0.8;
+    for (let i = 1; i < tickCount; i++) {
+      const dist = i * tickSpacing;
+      if (dist < innerGap) continue;
+      ctx2d.beginPath(); ctx2d.moveTo(cx - dist, cy - 3); ctx2d.lineTo(cx - dist, cy + 3); ctx2d.stroke();
+      ctx2d.beginPath(); ctx2d.moveTo(cx + dist, cy - 3); ctx2d.lineTo(cx + dist, cy + 3); ctx2d.stroke();
+      ctx2d.beginPath(); ctx2d.moveTo(cx - 3, cy - dist); ctx2d.lineTo(cx + 3, cy - dist); ctx2d.stroke();
+      ctx2d.beginPath(); ctx2d.moveTo(cx - 3, cy + dist); ctx2d.lineTo(cx + 3, cy + dist); ctx2d.stroke();
+    }
+
+    ctx2d.font = "11px 'Courier New', monospace";
+    ctx2d.fillStyle = 'rgba(255, 71, 87, 0.6)';
+    ctx2d.textAlign = 'center';
+    ctx2d.textBaseline = 'bottom';
+    const tfov = camera.fov.toFixed(2);
+    ctx2d.fillText(`TELESCOPE D200mm f1000mm | TFOV: ${tfov}° | RETICLE ON`, cx, cy + radius - 15);
+  }
+
+  ctx2d.restore();
+}
+
 // ==========================================
 // 惑星見頃・追跡UI更新
 // ==========================================
@@ -1644,6 +1736,46 @@ function initEvents() {
     if (!isNaN(parsed)) currentDate = new Date(parsed);
   });
 
+  const obsModeSelect = document.getElementById('obs-mode-select') as HTMLSelectElement;
+  const obsModeDetails = document.getElementById('obs-mode-details')!;
+  const obsModeDesc = document.getElementById('obs-mode-desc')!;
+
+  obsModeSelect.addEventListener('change', () => {
+    const val = obsModeSelect.value as 'none' | 'binoculars' | 'telescope';
+    observationMode = val;
+
+    if (val === 'none') {
+      camera.fov = baseFov;
+      camera.updateProjectionMatrix();
+      obsModeDetails.style.display = 'none';
+      showToast('通常モード (肉眼・広角) に戻しました', 'info');
+    } else if (val === 'binoculars') {
+      camera.fov = 7.5;
+      camera.updateProjectionMatrix();
+      obsModeDesc.innerHTML = `
+        <strong>双眼鏡シミュレーション (7x50 相当)</strong><br>
+        ・倍率: 7倍 / 対物有効径: 50mm<br>
+        ・実視野 (TFOV): 7.5°<br>
+        ・ズーム制限: 4.0° 〜 15.0° (ホイール操作可)<br>
+        <span style="color:var(--text-secondary); opacity: 0.8; font-size: 0.72rem;">手軽に星域をスキャンするのに最適です。天の川や明るい星団が美しく見えます。</span>
+      `;
+      obsModeDetails.style.display = 'block';
+      showToast('双眼鏡モード (実視野 7.5°) に切り替えました', 'info');
+    } else if (val === 'telescope') {
+      camera.fov = 1.0;
+      camera.updateProjectionMatrix();
+      obsModeDesc.innerHTML = `
+        <strong>望遠鏡シミュレーション (中倍率・レチクル)</strong><br>
+        ・口径: 200mm / 焦点距離: 1000mm (F5)<br>
+        ・実視野 (TFOV): 1.0° (レチクル照準付き)<br>
+        ・ズーム制限: 0.2° 〜 4.0° (ホイール操作可)<br>
+        <span style="color:var(--text-secondary); opacity: 0.8; font-size: 0.72rem;">月、惑星の表面、遠方の星雲・星団（DSO）をクローズアップして観測できます。</span>
+      `;
+      obsModeDetails.style.display = 'block';
+      showToast('望遠鏡モード (実視野 1.0°) に切り替えました', 'info');
+    }
+  });
+
   const constellationCheckbox = document.getElementById('toggle-constellations') as HTMLInputElement;
   const starNamesCheckbox = document.getElementById('toggle-star-names') as HTMLInputElement;
 
@@ -1752,8 +1884,19 @@ function initEvents() {
   // ホイールズーム
   webglCanvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    // 広角85°〜望遠10°の広いズーム範囲（超広角視点が最大の3D感）
-    camera.fov = Math.max(10.0, Math.min(100.0, camera.fov * (e.deltaY < 0 ? (1/1.08) : 1.08)));
+    
+    // 観測モードごとにズーム範囲を制限
+    let minFov = 10.0;
+    let maxFov = 100.0;
+    if (observationMode === 'binoculars') {
+      minFov = 4.0;
+      maxFov = 15.0;
+    } else if (observationMode === 'telescope') {
+      minFov = 0.2;
+      maxFov = 4.0;
+    }
+
+    camera.fov = Math.max(minFov, Math.min(maxFov, camera.fov * (e.deltaY < 0 ? (1/1.08) : 1.08)));
     camera.updateProjectionMatrix();
   }, { passive: false });
 

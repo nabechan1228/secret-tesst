@@ -588,6 +588,24 @@
           </div>
         </div>
 
+        <!-- 観測モード -->
+        <div class="panel">
+          <div class="panel-title">Observation Mode</div>
+          <div class="control-group">
+            <div class="control-row">
+              <label for="obs-mode-select">観測モード</label>
+              <select id="obs-mode-select">
+                <option value="none" selected>通常 (肉眼・広角)</option>
+                <option value="binoculars">双眼鏡 (7x50 相当)</option>
+                <option value="telescope">望遠鏡 (中倍率・レチクル)</option>
+              </select>
+            </div>
+            <div id="obs-mode-details" style="display:none;margin-top:10px;padding:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(80,160,255,0.12);border-radius:10px;font-size:0.75rem;line-height:1.6;color:var(--text-secondary);">
+              <span id="obs-mode-desc"></span>
+            </div>
+          </div>
+        </div>
+
         <!-- 表示設定 -->
         <div class="panel">
           <div class="panel-title">Display Settings</div>
