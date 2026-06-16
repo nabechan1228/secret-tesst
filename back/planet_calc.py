@@ -184,6 +184,44 @@ def _earth_heliocentric_ecliptic(T: float) -> Dict[str, float]:
     }
 
 
+def _moon_geocentric_ecliptic(T: float) -> Dict[str, float]:
+    """
+    地球から見た月の地心黄道座標 (lon, lat, dist) を計算する簡易式
+    T: J2000.0 からのユリウス世紀数
+    """
+    # 月の平均経度 (度)
+    L_prime = (218.3164477 + 481267.88123421 * T) % 360.0
+    # 太陽の平均近点角 (度)
+    M = (357.5291092 + 35999.0502909 * T) % 360.0
+    # 月の平均近点角 (度)
+    M_prime = (134.9633964 + 477198.8675055 * T) % 360.0
+    # 月の平均緯度引数 (度)
+    F = (93.2720950 + 483202.0175233 * T) % 360.0
+    # 太陽と月の平均離角 (度)
+    D = (297.8501921 + 445267.1114034 * T) % 360.0
+
+    # 主要摂動項を加算
+    lon = L_prime + \
+          6.289 * math.sin(math.radians(M_prime)) + \
+          1.274 * math.sin(math.radians(2*D - M_prime)) + \
+          0.658 * math.sin(math.radians(2*D)) + \
+          0.214 * math.sin(math.radians(2*M_prime)) - \
+          0.186 * math.sin(math.radians(M)) - \
+          0.114 * math.sin(math.radians(2*F)) + \
+          0.053 * math.sin(math.radians(M_prime + M))
+          
+    lat = 5.128 * math.sin(math.radians(F)) + \
+          0.280 * math.sin(math.radians(M_prime + F)) + \
+          0.280 * math.sin(math.radians(F - M_prime)) + \
+          0.185 * math.sin(math.radians(2*D - F))
+
+    # 距離 (km)
+    dist_km = 385001.0 - 20905.0 * math.cos(math.radians(M_prime)) - 3699.0 * math.cos(math.radians(2*D - M_prime))
+    dist_au = dist_km / 149597870.7  # km -> AU
+
+    return {"lon": lon % 360.0, "lat": lat, "dist": dist_au}
+
+
 def _ecliptic_to_equatorial(lon_deg: float, lat_deg: float, T: float) -> Dict[str, float]:
     """
     黄道座標 (lon, lat) → 赤道座標 (RA, Dec) に変換
@@ -270,6 +308,34 @@ def get_planet_positions(
             "color":   "#fff176",
             "mag":     -26.74,
             "dist_au": round(sun_dist, 4),
+        })
+    except Exception as e:
+        pass
+
+    # 月の地心位置を計算
+    try:
+        moon_ecl = _moon_geocentric_ecliptic(T)
+        moon_eq = _ecliptic_to_equatorial(moon_ecl["lon"], moon_ecl["lat"], T)
+        moon_hor = equatorial_to_horizontal_fn(moon_eq["ra"], moon_eq["dec"], lst_deg, lat)
+        
+        # 太陽と月の位置関係から満ち欠け（輝面比）を求め、月齢に応じて月自身の明るさ（等級: mag）を求める
+        s_lon = sun_lon if 'sun_lon' in locals() else _normalize_degrees(280.46646 + 36000.76983 * T)
+        D_rad = math.radians(moon_ecl["lon"] - s_lon)
+        # 輝面比 k
+        k = (1.0 + math.cos(math.pi - D_rad)) / 2.0
+        # 満月時で -12.7等
+        mag = -12.7 + 10.0 * (1.0 - k)
+        
+        results.append({
+            "name":    "Moon",
+            "name_ja": "月",
+            "ra":      round(moon_eq["ra"],    4),
+            "dec":     round(moon_eq["dec"],   4),
+            "az":      round(moon_hor["az"],   4),
+            "alt":     round(moon_hor["alt"],  4),
+            "color":   "#e0e0e0",
+            "mag":     round(mag, 1),
+            "dist_au": round(moon_ecl["dist"], 5),
         })
     except Exception as e:
         pass
