@@ -4,6 +4,9 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
+// S-5/R-3: APIベースURLを環境変数に一元化（ハードコード禁止）
+const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000';
+
 
 
 // ==========================================
@@ -137,6 +140,13 @@ let dsoData: DSOData[] = [];
 let planetsDsoLastUpdate = 0;
 const PLANETS_DSO_UPDATE_INTERVAL_MS = 30000;
 const PLANETS_DSO_TIMELAPSE_UPDATE_INTERVAL_MS = 1500; // タイムラプス中は1.5秒ごとに更新
+
+// R-5: DSO座標の重複定義を一元化（main.ts 内3箇所で重複していたものをここに集約）
+const DSO_FIXED_COORDS: Record<string, { ra: number; dec: number }> = {
+  M31: { ra: 0.7122, dec: 41.2692 },
+  M42: { ra: 5.5883, dec: -5.39 },
+  M45: { ra: 3.7883, dec: 24.1167 },
+};
 
 // タイムラプス状態変数
 let isTimelapseActive = false;
@@ -728,23 +738,17 @@ async function loadFromAPI(): Promise<void> {
   if (statusEl) statusEl.textContent = 'APIからデータ取得中...';
 
   try {
-    const metaRes = await fetch('http://localhost:8000/api/constellations');
+    // S-5: ハードコードされた localhost:8000 を API_BASE に置き換え
+    const metaRes = await fetch(`${API_BASE}/api/constellations`);
     if (metaRes.ok) {
       const metaData = await metaRes.json();
       constellationMeta = metaData.constellations;
     }
 
-    const skyRes = await fetch(
-      `http://localhost:8000/api/sky?lat=${latitude}&lng=${longitude}&mag_limit=6.0`
-    );
-    if (!skyRes.ok) throw new Error('Sky API error');
-    const skyData = await skyRes.json();
+    const skyData = await fetchSkyData();
+    if (!skyData) throw new Error('Sky API error');
 
-    starsData = skyData.stars;
-    constellationLinesData = skyData.constellation_lines;
-    planetsData = skyData.planets || [];
-    dsoData = skyData.deep_sky_objects || [];
-    planetsDsoLastUpdate = Date.now();
+    applySkyData(skyData);
 
     if (statusEl) statusEl.textContent = `${starsData.length}星 / 感星${planetsData.length} / DSO${dsoData.length}天体`;
     console.log(`✓ API loaded: ${starsData.length} stars, ${constellationLinesData.length} constellations`);
@@ -758,6 +762,29 @@ async function loadFromAPI(): Promise<void> {
     if (statusEl) statusEl.textContent = 'APIエラー: バックエンドを起動してください';
     showToast('バックエンドAPIに接続できません。', 'error');
   }
+}
+
+// R-4: API呼び出しの共通関数（loadFromAPI と refreshPlanetsAndDSO の重複を排除）
+async function fetchSkyData(): Promise<Record<string, unknown> | null> {
+  // S-5: API_BASE 使用
+  const skyRes = await fetch(
+    `${API_BASE}/api/sky?lat=${latitude}&lng=${longitude}&mag_limit=6.0`
+  );
+  if (!skyRes.ok) {
+    console.warn(`Sky API responded with status: ${skyRes.status}`);
+    return null;
+  }
+  return skyRes.json();
+}
+
+// R-4: データ適用の共通関数
+function applySkyData(skyData: Record<string, unknown>): void {
+  starsData = (skyData.stars as StarData[]) || [];
+  constellationLinesData = (skyData.constellation_lines as ConstellationLineData[]) || [];
+  planetsData = (skyData.planets as PlanetData[]) || [];
+  dsoData = (skyData.deep_sky_objects as DSOData[]) || [];
+  planetRecommendation = (skyData.recommendation as PlanetRecommendation) || null;
+  planetsDsoLastUpdate = Date.now();
 }
 
 function initWorker() {
@@ -809,15 +836,11 @@ function updateStarSpritesFromBuffer(coords: Float32Array) {
       targetRa = trackP.ra;
       targetDec = trackP.dec;
     } else {
-      const dsoConfigs = [
-        { id: 'M31', ra: 0.7122, dec: 41.2692 },
-        { id: 'M42', ra: 5.5883, dec: -5.39 },
-        { id: 'M45', ra: 3.7883, dec: 24.1167 }
-      ];
-      const trackD = dsoConfigs.find(d => d.id === activeTrackPlanet);
-      if (trackD) {
-        targetRa = trackD.ra;
-        targetDec = trackD.dec;
+      // R-5: DSO_FIXED_COORDS から座標を取得（ローカル変数による重複定義を廃止）
+      const fixedCoord = DSO_FIXED_COORDS[activeTrackPlanet];
+      if (fixedCoord) {
+        targetRa = fixedCoord.ra;
+        targetDec = fixedCoord.dec;
       }
     }
   }
@@ -1127,13 +1150,10 @@ function updatePositionsAndRender() {
         targetAz = hor.az;
         targetAlt = hor.alt;
       } else {
-        // M31/M42/M45 など DSO リストに無い場合のフォールバック
-        let ra = 0, dec = 0;
-        if (activeTrackPlanet === 'M31') { ra = 0.7122; dec = 41.2692; }
-        else if (activeTrackPlanet === 'M42') { ra = 5.5883; dec = -5.39; }
-        else if (activeTrackPlanet === 'M45') { ra = 3.7883; dec = 24.1167; }
-        if (ra !== 0) {
-          const hor = equatorialToHorizontal(ra, dec, lst, latitude);
+        // R-5: DSO リストに無い場合も DSO_FIXED_COORDS を参照（ハードコード座標を廃止）
+        const fixedCoord = DSO_FIXED_COORDS[activeTrackPlanet];
+        if (fixedCoord) {
+          const hor = equatorialToHorizontal(fixedCoord.ra, fixedCoord.dec, lst, latitude);
           targetAz = hor.az;
           targetAlt = hor.alt;
         }
@@ -1774,9 +1794,9 @@ function updateDsoPhotos(lst: number) {
 
   // 3. DSO天体の更新
   const dsoConfigs = [
-    { id: 'M31', ra: 0.7122, dec: 41.2692 },
-    { id: 'M42', ra: 5.5883, dec: -5.39 },
-    { id: 'M45', ra: 3.7883, dec: 24.1167 }
+    { id: 'M31', ...DSO_FIXED_COORDS['M31'] },
+    { id: 'M42', ...DSO_FIXED_COORDS['M42'] },
+    { id: 'M45', ...DSO_FIXED_COORDS['M45'] },
   ];
 
   dsoConfigs.forEach(cfg => {
@@ -1806,23 +1826,39 @@ function updatePlanetTrackerUI() {
   if (!infoEl || !controlsEl) return;
 
   if (!planetRecommendation || planetRecommendation.score === 0) {
-    infoEl.innerHTML = `<div style="font-size:0.82rem;color:var(--text-muted);">今夜は肉眼で見頃な惑星はありません。</div>`;
+    infoEl.innerHTML = '';
+    const msgEl = document.createElement('div');
+    msgEl.style.cssText = 'font-size:0.82rem;color:var(--text-muted);';
+    msgEl.textContent = '今夜は肉眼で見頃な惑星はありません。';
+    infoEl.appendChild(msgEl);
     controlsEl.style.display = 'none';
     return;
   }
 
-  infoEl.innerHTML = `
-    <div style="font-size:0.9rem;font-weight:bold;color:var(--gold);margin-bottom:6px;display:flex;align-items:center;gap:4px;">
-      🪐 今夜の見頃: ${planetRecommendation.name_ja} (${planetRecommendation.name})
-    </div>
-    <div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:6px;line-height:1.4;">
-      明るさ: ${planetRecommendation.mag}等 / 最大高度: ${planetRecommendation.max_alt}°<br>
-      時間帯: ${planetRecommendation.time_range}
-    </div>
-    <div style="font-size:0.78rem;color:var(--text-primary);line-height:1.6;background:rgba(255,255,255,0.03);padding:10px;border-radius:10px;border:1px solid rgba(80,160,255,0.08);">
-      ${planetRecommendation.comment}
-    </div>
-  `;
+  // S-6: innerHTML でサーバーデータを直接展開するのを廃止し、DOM操作に変更（XSS対策）
+  infoEl.innerHTML = '';
+
+  // 見頃ラベル行
+  const titleEl = document.createElement('div');
+  titleEl.style.cssText = 'font-size:0.9rem;font-weight:bold;color:var(--gold);margin-bottom:6px;display:flex;align-items:center;gap:4px;';
+  titleEl.textContent = `🪐 今夜の見頃: ${planetRecommendation.name_ja} (${planetRecommendation.name})`;
+  infoEl.appendChild(titleEl);
+
+  // 詳細行
+  const detailEl = document.createElement('div');
+  detailEl.style.cssText = 'font-size:0.75rem;color:var(--text-secondary);margin-bottom:6px;line-height:1.4;';
+  detailEl.textContent = `明るさ: ${planetRecommendation.mag}等 / 最大高度: ${planetRecommendation.max_alt}°`;
+  const brEl = document.createElement('br');
+  detailEl.appendChild(brEl);
+  detailEl.append(`時間帯: ${planetRecommendation.time_range}`);
+  infoEl.appendChild(detailEl);
+
+  // コメント行
+  const commentEl = document.createElement('div');
+  commentEl.style.cssText = 'font-size:0.78rem;color:var(--text-primary);line-height:1.6;background:rgba(255,255,255,0.03);padding:10px;border-radius:10px;border:1px solid rgba(80,160,255,0.08);';
+  commentEl.textContent = planetRecommendation.comment; // textContent でXSS回避
+  infoEl.appendChild(commentEl);
+
   controlsEl.style.display = 'flex';
 }
 
@@ -1844,7 +1880,17 @@ function showConstellationInfo(cid: string) {
     'autumn': '🍂 秋', 'winter': '❄️ 冬', 'all': '🌐 全天'
   };
 
-  nameEl.innerHTML = `<span class="const-name-ja">${meta.name_ja}</span> <span class="const-name-en">${meta.name_en}</span>`;
+  // S-6: innerHTML でサーバーデータを直接展開するのを廃止し、DOM操作に変更（XSS対策）
+  nameEl.textContent = '';
+  const jaSpan = document.createElement('span');
+  jaSpan.className = 'const-name-ja';
+  jaSpan.textContent = meta.name_ja;
+  nameEl.appendChild(jaSpan);
+  nameEl.append(' ');
+  const enSpan = document.createElement('span');
+  enSpan.className = 'const-name-en';
+  enSpan.textContent = meta.name_en;
+  nameEl.appendChild(enSpan);
   descEl.textContent = meta.desc;
   seasonEl.textContent = seasonMap[meta.season] || meta.season;
 
@@ -1873,6 +1919,56 @@ function showToast(msg: string, type: 'info' | 'error' = 'info') {
 function formatDate(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+// ==========================================
+// 観測モード説明の DOM 操作ヘルパー（innerHTML 注入廃止・XSS 対策）
+// ==========================================
+
+type ObsMode = 'none' | 'binoculars' | 'telescope';
+
+function setObsModeDescription(el: HTMLElement, mode: ObsMode) {
+  el.textContent = '';
+
+  type ModeConfig = { title: string; specs: string[]; note: string };
+  const configs: Record<Exclude<ObsMode, 'none'>, ModeConfig> = {
+    binoculars: {
+      title: '双眼鏡シミュレーション (7x50 相当)',
+      specs: [
+        '・倍率: 7倍 / 対物有効径: 50mm',
+        '・実視野 (TFOV): 7.5°',
+        '・ズーム制限: 4.0° 〜 15.0° (ホイール操作可)',
+      ],
+      note: '手軽に星域をスキャンするのに最適です。天の川や明るい星団が美しく見えます。',
+    },
+    telescope: {
+      title: '望遠鏡シミュレーション (中倍率・レチクル)',
+      specs: [
+        '・口径: 200mm / 焦点距離: 1000mm (F5)',
+        '・実視野 (TFOV): 1.0° (レチクル照準付き)',
+        '・ズーム制限: 0.2° 〜 4.0° (ホイール操作可)',
+      ],
+      note: '月、惑星の表面、遠方の星雲・星団（DSO）をクローズアップして観測できます。',
+    },
+  };
+
+  if (mode === 'none') return;
+  const cfg = configs[mode];
+
+  const strong = document.createElement('strong');
+  strong.textContent = cfg.title;
+  el.appendChild(strong);
+
+  cfg.specs.forEach(spec => {
+    el.appendChild(document.createElement('br'));
+    el.append(spec);
+  });
+
+  el.appendChild(document.createElement('br'));
+  const noteSpan = document.createElement('span');
+  noteSpan.style.cssText = 'color:var(--text-secondary); opacity: 0.8; font-size: 0.72rem;';
+  noteSpan.textContent = cfg.note;
+  el.appendChild(noteSpan);
 }
 
 // ==========================================
@@ -1956,13 +2052,10 @@ function initEvents() {
         targetAz = hor.az;
         targetAlt = hor.alt;
       } else {
-        let ra = 0, dec = 0;
-        if (target === 'M31') { ra = 0.7122; dec = 41.2692; }
-        else if (target === 'M42') { ra = 5.5883; dec = -5.39; }
-        else if (target === 'M45') { ra = 3.7883; dec = 24.1167; }
-        
-        if (ra !== 0) {
-          const hor = equatorialToHorizontal(ra, dec, initLst, latitude);
+        // R-5: DSO_FIXED_COORDS から取得（重複定義廃止）
+        const fixedCoord = DSO_FIXED_COORDS[target];
+        if (fixedCoord) {
+          const hor = equatorialToHorizontal(fixedCoord.ra, fixedCoord.dec, initLst, latitude);
           targetAz = hor.az;
           targetAlt = hor.alt;
         }
@@ -1979,13 +2072,7 @@ function initEvents() {
       camera.fov = 1.0;
       camera.updateProjectionMatrix();
       
-      obsModeDesc.innerHTML = `
-        <strong>望遠鏡シミュレーション (中倍率・レチクル)</strong><br>
-        ・口径: 200mm / 焦点距離: 1000mm (F5)<br>
-        ・実視野 (TFOV): 1.0° (レチクル照準付き)<br>
-        ・ズーム制限: 0.2° 〜 4.0° (ホイール操作可)<br>
-        <span style="color:var(--text-secondary); opacity: 0.8; font-size: 0.72rem;">月、惑星の表面、遠方の星雲・星団（DSO）をクローズアップして観測できます。</span>
-      `;
+      setObsModeDescription(obsModeDesc, 'telescope');
       obsModeDetails.style.display = 'block';
 
       isPlanetLockOn = true;
@@ -2024,25 +2111,13 @@ function initEvents() {
     } else if (val === 'binoculars') {
       camera.fov = 7.5;
       camera.updateProjectionMatrix();
-      obsModeDesc.innerHTML = `
-        <strong>双眼鏡シミュレーション (7x50 相当)</strong><br>
-        ・倍率: 7倍 / 対物有効径: 50mm<br>
-        ・実視野 (TFOV): 7.5°<br>
-        ・ズーム制限: 4.0° 〜 15.0° (ホイール操作可)<br>
-        <span style="color:var(--text-secondary); opacity: 0.8; font-size: 0.72rem;">手軽に星域をスキャンするのに最適です。天の川や明るい星団が美しく見えます。</span>
-      `;
+      setObsModeDescription(obsModeDesc, 'binoculars');
       obsModeDetails.style.display = 'block';
       showToast('双眼鏡モード (実視野 7.5°) に切り替えました', 'info');
     } else if (val === 'telescope') {
       camera.fov = 1.0;
       camera.updateProjectionMatrix();
-      obsModeDesc.innerHTML = `
-        <strong>望遠鏡シミュレーション (中倍率・レチクル)</strong><br>
-        ・口径: 200mm / 焦点距離: 1000mm (F5)<br>
-        ・実視野 (TFOV): 1.0° (レチクル照準付き)<br>
-        ・ズーム制限: 0.2° 〜 4.0° (ホイール操作可)<br>
-        <span style="color:var(--text-secondary); opacity: 0.8; font-size: 0.72rem;">月、惑星の表面、遠方の星雲・星団（DSO）をクローズアップして観測できます。</span>
-      `;
+      setObsModeDescription(obsModeDesc, 'telescope');
       obsModeDetails.style.display = 'block';
       showToast('望遠鏡モード (実視野 1.0°) に切り替えました', 'info');
     }
@@ -2405,25 +2480,25 @@ function updateTime() {
 }
 
 async function refreshPlanetsAndDSO() {
-  planetsDsoLastUpdate = Date.now();
   try {
-    const skyRes = await fetch(
-      `http://localhost:8000/api/sky?lat=${latitude}&lng=${longitude}&mag_limit=6.0`
-    );
-    if (!skyRes.ok) return;
-    const skyData = await skyRes.json();
-    planetsData = skyData.planets || [];
-    dsoData = skyData.deep_sky_objects || [];
-    starsData = skyData.stars;
-    constellationLinesData = skyData.constellation_lines;
-    planetRecommendation = skyData.recommendation || null;
+    // R-4: 共通関数 fetchSkyData を使用
+    const skyData = await fetchSkyData();
+    if (!skyData) {
+      // S-7: サイレント失敗を廃止し、警告ログを残す
+      console.warn('refreshPlanetsAndDSO: Sky API が失敗しました（更新をスキップ）');
+      return;
+    }
+    
+    // 静的データ（恒星・星座線）はロード時のままとし、動的データのみを更新
+    planetsData = (skyData.planets as PlanetData[]) || [];
+    dsoData = (skyData.deep_sky_objects as DSOData[]) || [];
+    planetRecommendation = (skyData.recommendation as PlanetRecommendation) || null;
+    planetsDsoLastUpdate = Date.now();
 
-    allocateConstellationBuffer();
-    buildStarSprites();
-    syncStarsToWorker();
     updatePlanetTrackerUI();
-  } catch (_) {
-    // サイレントに失敗
+  } catch (err) {
+    // S-7: エラーをコンソールに記録（完全な握りつぶし廃止）
+    console.warn('refreshPlanetsAndDSO: 例外が発生しました:', err);
   }
 }
 
