@@ -146,6 +146,22 @@ const DSO_FIXED_COORDS: Record<string, { ra: number; dec: number }> = {
   M31: { ra: 0.7122, dec: 41.2692 },
   M42: { ra: 5.5883, dec: -5.39 },
   M45: { ra: 3.7883, dec: 24.1167 },
+  M6: { ra: 17.668, dec: -32.217 },
+  M7: { ra: 17.899, dec: -34.817 },
+  M11: { ra: 18.852, dec: -6.267 },
+  M15: { ra: 21.500, dec: 12.167 },
+  M24: { ra: 18.281, dec: -18.417 },
+  M35: { ra: 6.148, dec: 24.333 },
+  M78: { ra: 5.778, dec: 0.083 },
+  M83: { ra: 13.618, dec: -29.867 },
+  M90: { ra: 12.614, dec: 13.167 },
+  IC434: { ra: 5.685, dec: -2.460 },
+  NGC2237: { ra: 6.538, dec: 5.017 },
+  NGC869: { ra: 2.333, dec: 57.143 },
+  NGC7000: { ra: 20.983, dec: 44.333 },
+  NGC6960: { ra: 20.762, dec: 30.714 },
+  NGC7293: { ra: 22.493, dec: -20.835 },
+  NGC6543: { ra: 17.977, dec: 66.633 },
 };
 
 // タイムラプス状態変数
@@ -1723,7 +1739,23 @@ function buildDsoPhotos() {
     { id: 'Jupiter', file: 'jupiter.png', ra: 0, dec: 0, scale: 5.0 },
     { id: 'Saturn', file: 'saturn.png', ra: 0, dec: 0, scale: 5.0 },
     { id: 'Venus', file: 'venus.png', ra: 0, dec: 0, scale: 3.5 },
-    { id: 'Mars', file: 'mars.png', ra: 0, dec: 0, scale: 3.5 }
+    { id: 'Mars', file: 'mars.png', ra: 0, dec: 0, scale: 3.5 },
+    { id: 'M6', file: 'm6.png', ra: 17.668, dec: -32.217, scale: 15.0 },
+    { id: 'M7', file: 'm7.png', ra: 17.899, dec: -34.817, scale: 25.0 },
+    { id: 'M11', file: 'm11.png', ra: 18.852, dec: -6.267, scale: 12.0 },
+    { id: 'M15', file: 'm15.png', ra: 21.500, dec: 12.167, scale: 10.0 },
+    { id: 'M24', file: 'm24.png', ra: 18.281, dec: -18.417, scale: 25.0 },
+    { id: 'M35', file: 'm35.png', ra: 6.148, dec: 24.333, scale: 16.0 },
+    { id: 'M78', file: 'm78.png', ra: 5.778, dec: 0.083, scale: 12.0 },
+    { id: 'M83', file: 'm83.png', ra: 13.618, dec: -29.867, scale: 15.0 },
+    { id: 'M90', file: 'm90.png', ra: 12.614, dec: 13.167, scale: 12.0 },
+    { id: 'IC434', file: 'ic434.png', ra: 5.685, dec: -2.460, scale: 18.0 },
+    { id: 'NGC2237', file: 'ngc2237.png', ra: 6.538, dec: 5.017, scale: 24.0 },
+    { id: 'NGC869', file: 'ngc869.png', ra: 2.333, dec: 57.143, scale: 20.0 },
+    { id: 'NGC7000', file: 'ngc7000.png', ra: 20.983, dec: 44.333, scale: 26.0 },
+    { id: 'NGC6960', file: 'ngc6960.png', ra: 20.762, dec: 30.714, scale: 20.0 },
+    { id: 'NGC7293', file: 'ngc7293.png', ra: 22.493, dec: -20.835, scale: 16.0 },
+    { id: 'NGC6543', file: 'ngc6543.png', ra: 17.977, dec: 66.633, scale: 8.0 }
   ];
 
   dsoConfigs.forEach(cfg => {
@@ -1797,6 +1829,22 @@ function updateDsoPhotos(lst: number) {
     { id: 'M31', ...DSO_FIXED_COORDS['M31'] },
     { id: 'M42', ...DSO_FIXED_COORDS['M42'] },
     { id: 'M45', ...DSO_FIXED_COORDS['M45'] },
+    { id: 'M6', ...DSO_FIXED_COORDS['M6'] },
+    { id: 'M7', ...DSO_FIXED_COORDS['M7'] },
+    { id: 'M11', ...DSO_FIXED_COORDS['M11'] },
+    { id: 'M15', ...DSO_FIXED_COORDS['M15'] },
+    { id: 'M24', ...DSO_FIXED_COORDS['M24'] },
+    { id: 'M35', ...DSO_FIXED_COORDS['M35'] },
+    { id: 'M78', ...DSO_FIXED_COORDS['M78'] },
+    { id: 'M83', ...DSO_FIXED_COORDS['M83'] },
+    { id: 'M90', ...DSO_FIXED_COORDS['M90'] },
+    { id: 'IC434', ...DSO_FIXED_COORDS['IC434'] },
+    { id: 'NGC2237', ...DSO_FIXED_COORDS['NGC2237'] },
+    { id: 'NGC869', ...DSO_FIXED_COORDS['NGC869'] },
+    { id: 'NGC7000', ...DSO_FIXED_COORDS['NGC7000'] },
+    { id: 'NGC6960', ...DSO_FIXED_COORDS['NGC6960'] },
+    { id: 'NGC7293', ...DSO_FIXED_COORDS['NGC7293'] },
+    { id: 'NGC6543', ...DSO_FIXED_COORDS['NGC6543'] },
   ];
 
   dsoConfigs.forEach(cfg => {
@@ -2041,12 +2089,12 @@ function initEvents() {
     const initLst = getLocalSiderealTime(initJd, longitude);
 
     const trackP = planetsData.find(p => p.name === target);
+    let trackD = dsoData.find(d => d.id === target);
     if (trackP) {
       const hor = equatorialToHorizontal(trackP.ra, trackP.dec, initLst, latitude);
       targetAz = hor.az;
       targetAlt = hor.alt;
     } else {
-      const trackD = dsoData.find(d => d.id === target);
       if (trackD) {
         const hor = equatorialToHorizontal(trackD.ra, trackD.dec, initLst, latitude);
         targetAz = hor.az;
@@ -2079,11 +2127,9 @@ function initEvents() {
       const lockCheckbox = document.getElementById('toggle-planet-lock') as HTMLInputElement;
       if (lockCheckbox) lockCheckbox.checked = true;
 
-      const targetNameJa = target === 'Moon' ? '月' : 
-                           target === 'M31' ? 'アンドロメダ銀河' :
-                           target === 'M42' ? 'オリオン大星雲' :
-                           target === 'M45' ? 'プレアデス星団' :
-                           trackP ? trackP.name_ja : target;
+      const targetNameJa = trackP ? trackP.name_ja :
+                           trackD ? trackD.name_ja :
+                           target === 'Moon' ? '月' : target;
       
       showToast(`${targetNameJa} へ自動導入し、自動追尾を開始します`, 'info');
     } else {
