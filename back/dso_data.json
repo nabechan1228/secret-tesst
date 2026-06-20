@@ -339,5 +339,181 @@
     "size": 30.0,
     "mag": 6.9,
     "constellation": "Cnc"
+  },
+  {
+    "id": "M6",
+    "name_ja": "バタフライ星団 (M6)",
+    "name_en": "Butterfly Cluster",
+    "ra": 17.668,
+    "dec": -32.217,
+    "type": "open_cluster",
+    "size": 25.0,
+    "mag": 4.2,
+    "constellation": "Sco"
+  },
+  {
+    "id": "M7",
+    "name_ja": "プトレマイオス星団 (M7)",
+    "name_en": "Ptolemy Cluster",
+    "ra": 17.899,
+    "dec": -34.817,
+    "type": "open_cluster",
+    "size": 80.0,
+    "mag": 3.3,
+    "constellation": "Sco"
+  },
+  {
+    "id": "M11",
+    "name_ja": "野鴨星団 (M11)",
+    "name_en": "Wild Duck Cluster",
+    "ra": 18.852,
+    "dec": -6.267,
+    "type": "open_cluster",
+    "size": 14.0,
+    "mag": 6.3,
+    "constellation": "Sct"
+  },
+  {
+    "id": "M15",
+    "name_ja": "ペガスス座球状星団 (M15)",
+    "name_en": "Pegasus Cluster",
+    "ra": 21.500,
+    "dec": 12.167,
+    "type": "cluster",
+    "size": 18.0,
+    "mag": 6.2,
+    "constellation": "Peg"
+  },
+  {
+    "id": "M24",
+    "name_ja": "いて座スタークラウド (M24)",
+    "name_en": "Sagittarius Star Cloud",
+    "ra": 18.281,
+    "dec": -18.417,
+    "type": "open_cluster",
+    "size": 90.0,
+    "mag": 4.6,
+    "constellation": "Sgr"
+  },
+  {
+    "id": "M35",
+    "name_ja": "M35散開星団",
+    "name_en": "M35",
+    "ra": 6.148,
+    "dec": 24.333,
+    "type": "open_cluster",
+    "size": 28.0,
+    "mag": 5.1,
+    "constellation": "Gem"
+  },
+  {
+    "id": "M78",
+    "name_ja": "M78反射星雲",
+    "name_en": "M78",
+    "ra": 5.778,
+    "dec": 0.083,
+    "type": "nebula",
+    "size": 8.0,
+    "mag": 8.3,
+    "constellation": "Ori"
+  },
+  {
+    "id": "M83",
+    "name_ja": "南の回転花火銀河 (M83)",
+    "name_en": "Southern Pinwheel Galaxy",
+    "ra": 13.618,
+    "dec": -29.867,
+    "type": "galaxy",
+    "size": 12.9,
+    "mag": 7.5,
+    "constellation": "Hya"
+  },
+  {
+    "id": "M90",
+    "name_ja": "M90渦巻銀河",
+    "name_en": "M90",
+    "ra": 12.614,
+    "dec": 13.167,
+    "type": "galaxy",
+    "size": 9.5,
+    "mag": 9.5,
+    "constellation": "Vir"
+  },
+  {
+    "id": "IC434",
+    "name_ja": "馬頭星雲 (IC 434)",
+    "name_en": "Horsehead Nebula",
+    "ra": 5.685,
+    "dec": -2.460,
+    "type": "nebula",
+    "size": 60.0,
+    "mag": 7.3,
+    "constellation": "Ori"
+  },
+  {
+    "id": "NGC2237",
+    "name_ja": "バラ星雲 (NGC 2237)",
+    "name_en": "Rosette Nebula",
+    "ra": 6.538,
+    "dec": 5.017,
+    "type": "nebula",
+    "size": 80.0,
+    "mag": 9.0,
+    "constellation": "Mon"
+  },
+  {
+    "id": "NGC869",
+    "name_ja": "二重星団 (h-χ)",
+    "name_en": "Double Cluster",
+    "ra": 2.333,
+    "dec": 57.143,
+    "type": "open_cluster",
+    "size": 60.0,
+    "mag": 4.3,
+    "constellation": "Per"
+  },
+  {
+    "id": "NGC7000",
+    "name_ja": "北アメリカ星雲",
+    "name_en": "North America Nebula",
+    "ra": 20.983,
+    "dec": 44.333,
+    "type": "nebula",
+    "size": 120.0,
+    "mag": 4.0,
+    "constellation": "Cyg"
+  },
+  {
+    "id": "NGC6960",
+    "name_ja": "網状星雲 (NGC 6960)",
+    "name_en": "Veil Nebula",
+    "ra": 20.762,
+    "dec": 30.714,
+    "type": "supernova_remnant",
+    "size": 70.0,
+    "mag": 7.0,
+    "constellation": "Cyg"
+  },
+  {
+    "id": "NGC7293",
+    "name_ja": "らせん星雲 (NGC 7293)",
+    "name_en": "Helix Nebula",
+    "ra": 22.493,
+    "dec": -20.835,
+    "type": "nebula",
+    "size": 25.0,
+    "mag": 7.6,
+    "constellation": "Aqr"
+  },
+  {
+    "id": "NGC6543",
+    "name_ja": "キャッツアイ星雲",
+    "name_en": "Cat's Eye Nebula",
+    "ra": 17.977,
+    "dec": 66.633,
+    "type": "nebula",
+    "size": 0.3,
+    "mag": 8.1,
+    "constellation": "Dra"
   }
 ]

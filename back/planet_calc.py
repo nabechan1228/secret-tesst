@@ -9,7 +9,10 @@ Meeus "Astronomical Algorithms" 2nd Ed. の簡易近似式を使用
 """
 
 import math
+import logging
 from typing import List, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 
 # =====================================================
@@ -310,7 +313,7 @@ def get_planet_positions(
             "dist_au": round(sun_dist, 4),
         })
     except Exception as e:
-        pass
+        logger.warning("太陽位置計算中にエラーが発生しました: %s", e, exc_info=True)
 
     # 月の地心位置を計算
     try:
@@ -338,7 +341,7 @@ def get_planet_positions(
             "dist_au": round(moon_ecl["dist"], 5),
         })
     except Exception as e:
-        pass
+        logger.warning("月位置計算中にエラーが発生しました: %s", e, exc_info=True)
 
     for key, meta in PLANET_ELEMENTS.items():
         try:
@@ -404,7 +407,7 @@ def get_planet_positions(
                 "dist_au": round(dist, 4),
             })
         except Exception as e:
-            # 計算エラーは無視して次の惑星へ
+            logger.warning("惑星 %s の位置計算中にエラーが発生しました: %s", key, e, exc_info=True)
             continue
 
     return results

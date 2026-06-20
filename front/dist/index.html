@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Stellaris - Professional Interactive Planetarium</title>
     <meta name="description" content="5044星・88星座のリアルタイム3Dプラネタリウム。精密な天体計算でいつでもどこでも夜空を再現。">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' http://localhost:8000 http://127.0.0.1:8000; img-src 'self' data: blob:; worker-src 'self' blob:;">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Noto+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
@@ -452,7 +453,7 @@
         #constellation-info-panel { width: 260px; }
       }
     </style>
-    <script type="module" crossorigin src="/assets/index-CNbMpkSS.js"></script>
+    <script type="module" crossorigin src="/assets/index-D9HSRus9.js"></script>
   </head>
   <body>
     <div id="app-container">
@@ -616,6 +617,22 @@
                   <option value="M31">アンドロメダ銀河 (M31)</option>
                   <option value="M42">オリオン大星雲 (M42)</option>
                   <option value="M45">プレアデス星団 (M45 / すばる)</option>
+                  <option value="M6">バタフライ星団 (M6)</option>
+                  <option value="M7">プトレマイオス星団 (M7)</option>
+                  <option value="M11">野鴨星団 (M11)</option>
+                  <option value="M15">ペガスス座球状星団 (M15)</option>
+                  <option value="M24">いて座スタークラウド (M24)</option>
+                  <option value="M35">M35散開星団 (M35)</option>
+                  <option value="M78">M78反射星雲 (M78)</option>
+                  <option value="M83">南の回転花火銀河 (M83)</option>
+                  <option value="M90">M90渦巻銀河 (M90)</option>
+                  <option value="IC434">馬頭星雲 (IC 434)</option>
+                  <option value="NGC2237">バラ星雲 (NGC 2237)</option>
+                  <option value="NGC869">二重星団 (h-χ)</option>
+                  <option value="NGC7000">北アメリカ星雲 (NGC 7000)</option>
+                  <option value="NGC6960">網状星雲 (NGC 6960)</option>
+                  <option value="NGC7293">らせん星雲 (NGC 7293)</option>
+                  <option value="NGC6543">キャッツアイ星雲 (NGC 6543)</option>
                 </optgroup>
               </select>
             </div>
@@ -679,7 +696,7 @@
           <div>🔭 d3-celestial データ</div>
           <div>📡 Python 精密星間計算</div>
           <div>☄️ 惑星5天体 (ケプラー軌道要素)</div>
-          <div>🌌 メシエカタログ25天体</div>
+          <div>🌌 深宇宙天体 (DSO) 47天体</div>
         </div>
 
       </div>
