@@ -2399,7 +2399,12 @@ function initEvents() {
 
 function populateConstellationSelect() {
   const select = document.getElementById('constellation-select') as HTMLSelectElement;
-  select.innerHTML = '<option value="">-- 星座を選択 --</option>';
+  // V-8: innerHTML を DOM API に置き換え（XSSリスク排除）
+  while (select.firstChild) select.removeChild(select.firstChild);
+  const defaultOpt = document.createElement('option');
+  defaultOpt.value = '';
+  defaultOpt.textContent = '-- 星座を選択 --';
+  select.appendChild(defaultOpt);
 
   const seasonOrder = ['spring', 'summer', 'autumn', 'winter', 'all'];
   const seasonNames: Record<string, string> = {

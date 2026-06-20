@@ -16,6 +16,7 @@ d3-celestial (https://github.com/ofrohn/d3-celestial) から以下のデータ�
 
 import json
 import urllib.request
+import ssl
 import os
 import sys
 
@@ -26,7 +27,8 @@ def fetch_json(url):
     print(f"  取得中: {url}")
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Python/3.x astro-data-gen'})
-        with urllib.request.urlopen(req, timeout=30) as response:
+        ssl_ctx = ssl.create_default_context()  # V-7: SSL証明書検証を明示化
+        with urllib.request.urlopen(req, timeout=30, context=ssl_ctx) as response:
             data = response.read().decode('utf-8')
             return json.loads(data)
     except Exception as e:
