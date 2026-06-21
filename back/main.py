@@ -91,9 +91,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """
     # パスごとの制限: (最大リクエスト数, ウィンドウ秒数)
     RATE_LIMITS: Dict[str, tuple] = {
-        "/api/sky": (30, 60),
-        "/api/sky/stars-only": (60, 60),
-        "/api/constellations": (60, 60),
+        "/api/sky": (120, 60),
+        "/api/sky/stars-only": (120, 60),
+        "/api/constellations": (120, 60),
         "/health": (120, 60),
     }
     DEFAULT_LIMIT = (60, 60)
@@ -117,10 +117,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         if len(self._requests[client_ip][path]) >= max_requests:
             logger.warning("レート制限超過: IP=%s path=%s", client_ip, path)
+            headers = {"Retry-After": str(window)}
+            origin = request.headers.get("origin")
+            if origin in ALLOWED_ORIGINS:
+                headers["Access-Control-Allow-Origin"] = origin
+                headers["Access-Control-Allow-Headers"] = "Content-Type"
+                headers["Access-Control-Allow-Methods"] = "GET"
             return JSONResponse(
                 status_code=429,
                 content={"detail": "リクエストが多すぎます。しばらく待ってから再試行してください。"},
-                headers={"Retry-After": str(window)},
+                headers=headers,
             )
 
         self._requests[client_ip][path].append(now)
