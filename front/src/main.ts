@@ -475,8 +475,9 @@ async function loadFromAPI(): Promise<void> {
 }
 
 async function fetchSkyData(): Promise<Record<string, unknown> | null> {
+  const timeStr = encodeURIComponent(currentDate.toISOString());
   const skyRes = await fetch(
-    `${API_BASE}/api/sky?lat=${latitude}&lng=${longitude}&mag_limit=6.0`
+    `${API_BASE}/api/sky?lat=${latitude}&lng=${longitude}&mag_limit=6.0&time=${timeStr}`
   );
   if (!skyRes.ok) {
     console.warn(`Sky API responded with status: ${skyRes.status}`);
