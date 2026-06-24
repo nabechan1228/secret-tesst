@@ -121,6 +121,125 @@ let guideTarget: { az: number; alt: number } | null = null;
 let isAutoRotatingToGuide = false;
 
 // ==========================================
+// 拡張機能 (Enhanced Features) 状態
+// ==========================================
+let bortleScale = 4;
+let showMeteors = false;
+let activeMeteorShower = 'perseids';
+
+interface MeteorShower {
+  name: string;
+  ra: number; // hours
+  dec: number; // degrees
+  color: string;
+}
+
+const METEOR_SHOWERS: Record<string, MeteorShower> = {
+  perseids: { name: 'ペルセウス座流星群', ra: 3.1, dec: 58.0, color: '#e0f7fa' },
+  geminids: { name: 'ふたご座流星群', ra: 7.5, dec: 33.0, color: '#fff9c4' },
+  quadrantids: { name: 'しぶんぎ座流星群', ra: 15.3, dec: 49.0, color: '#e1bee7' },
+  lyrids: { name: 'こと座流星群', ra: 18.2, dec: 34.0, color: '#f1f8e9' }
+};
+
+interface ActiveMeteor {
+  line: THREE.Line;
+  origin: THREE.Vector3;
+  dir: THREE.Vector3;
+  speed: number;
+  length: number;
+  life: number;
+  decay: number;
+}
+let activeMeteors: ActiveMeteor[] = [];
+
+// 日食・月食のリアルタイム計算状態
+let isSolarEclipse = false;
+let eclipseRatio = 0.0;
+let isLunarEclipse = false;
+let lunarEclipseRatio = 0.0;
+
+// 現在選択中の天体イベント
+let activeCelestialEventKey: string | null = null;
+
+interface CelestialEvent {
+  name: string;
+  lat: number;
+  lng: number;
+  date: string;
+  description: string;
+  fov?: number;
+  target?: string;
+  timelapseStart?: string;
+  timelapseEnd?: string;
+  // 月食・日食の詳細タイムライン（JST文字列）
+  eclipseType?: 'lunar' | 'solar';
+  eclipseSubType?: 'annular' | 'total';  // 金環食 or 皆既食
+  eclipseStart?: string;   // 食の始まり（本影食始）
+  eclipsePeak?: string;    // 食の最大
+  eclipseEnd?: string;     // 食の終わり（本影食終）
+}
+
+const CELESTIAL_EVENTS: Record<string, CelestialEvent> = {
+  'eclipse-2012': {
+    name: '2012年 金環日食 (東京)',
+    lat: 35.68,
+    lng: 139.76,
+    date: '2012-05-21T07:32:00+09:00',
+    description: '東京で観測された非常に美しい金環日食。太陽と月がほぼ完全に重なり、リング状になりました。タイムラプスで食の進行が再生されます。',
+    fov: 1.5,
+    target: 'Sun',
+    timelapseStart: '2012-05-21T06:50:00+09:00',
+    timelapseEnd: '2012-05-21T08:15:00+09:00',
+    eclipseType: 'solar',
+    eclipseSubType: 'annular',
+    eclipseStart: '2012-05-21T06:58:00+09:00',
+    eclipsePeak: '2012-05-21T07:32:00+09:00',
+    eclipseEnd: '2012-05-21T08:08:00+09:00'
+  },
+  'eclipse-2022': {
+    name: '2022年 皆既月食 (東京)',
+    lat: 35.68,
+    lng: 139.76,
+    date: '2022-11-08T19:59:00+09:00',
+    description: '日本全国で好条件で観測された皆既月食。月が地球の本影に入り、幻想的な赤銅色（ブラッドムーン）に染まりました。タイムラプスで食の進行が再生されます。',
+    fov: 1.5,
+    target: 'Moon',
+    timelapseStart: '2022-11-08T18:45:00+09:00',
+    timelapseEnd: '2022-11-08T21:10:00+09:00',
+    eclipseType: 'lunar',
+    eclipseStart: '2022-11-08T18:09:00+09:00',   // 本影食始
+    eclipsePeak:  '2022-11-08T19:59:00+09:00',   // 食の最大
+    eclipseEnd:   '2022-11-08T21:49:00+09:00'    // 本影食終
+  },
+  'eclipse-2026': {
+    name: '2026年 皆既月食 (東京)',
+    lat: 35.68,
+    lng: 139.76,
+    date: '2026-03-03T20:30:00+09:00',
+    description: '2026年3月に発生する皆既月食のシミュレーション。月の欠け始めから皆既までの様子を観察できます。タイムラプスで食の進行が再生されます。',
+    fov: 1.5,
+    target: 'Moon',
+    timelapseStart: '2026-03-03T19:15:00+09:00',
+    timelapseEnd: '2026-03-03T21:40:00+09:00',
+    eclipseType: 'lunar',
+    eclipseStart: '2026-03-03T19:31:00+09:00',
+    eclipsePeak:  '2026-03-03T20:47:00+09:00',
+    eclipseEnd:   '2026-03-03T22:02:00+09:00'
+  },
+  'conjunction-2020': {
+    name: '2020年 木星・土星超大接近',
+    lat: 35.68,
+    lng: 139.76,
+    date: '2020-12-21T17:30:00+09:00',
+    description: '約400年ぶりとなる木星と土星の超大接近。望遠鏡の同一視野内に木星のガリレオ衛星と土星の環が同時に収まりました。',
+    fov: 0.4,
+    target: 'Jupiter'
+  }
+};
+
+
+
+// ==========================================
 // レンダリング用ヘルパー
 // ==========================================
 
@@ -533,6 +652,9 @@ function updateStarSpritesFromBuffer(coords: Float32Array) {
   const count = starsData.length;
   const now = Date.now();
 
+  const bortleLimits = [6.5, 6.5, 6.0, 5.5, 5.0, 4.5, 4.0, 3.5, 3.0, 2.0];
+  const limit = bortleLimits[bortleScale];
+
   let targetRa = -1;
   let targetDec = -100;
   if (activeTrackPlanet && observationMode !== 'none') {
@@ -558,6 +680,11 @@ function updateStarSpritesFromBuffer(coords: Float32Array) {
       const y = coords[idx + 1];
       const z = coords[idx + 2];
       let isVisible = coords[idx + 3] === 1.0;
+
+      // 光害レベル制限によるフィルタリング
+      if (isVisible && star.mag > limit) {
+        isVisible = false;
+      }
       
       if (isVisible && targetRa !== -1) {
         const dDec = star.dec - targetDec;
@@ -583,7 +710,14 @@ function updateStarSpritesFromBuffer(coords: Float32Array) {
       }
     }
   }
+
+  // 天の川の不透明度も光害レベルに応じて減衰
+  if (milkyWayParticles) {
+    const mwOpacity = Math.max(0.0, 0.85 * (1.0 - (bortleScale - 1) / 5.0));
+    (milkyWayParticles.material as THREE.PointsMaterial).opacity = mwOpacity;
+  }
 }
+
 
 function syncStarsToWorker() {
   if (starWorker && starsData.length > 0) {
@@ -657,7 +791,25 @@ function drawLightPollution(w: number, h: number, lst: number) {
   if (sunAlt > -8) {
     sunFade = Math.max(0.0, 1.0 - (sunAlt + 8) / 8.0);
   }
-  if (sunFade <= 0.01) return;
+
+  // 日食が進行している時は、食の割合に応じて空の明るさを強制的に下げる
+  let eclipseFade = 1.0;
+  if (isSolarEclipse) {
+    // 完全に重なると空はほぼ夜になる (皆既日食)
+    eclipseFade = Math.max(0.02, 1.0 - eclipseRatio * 0.98);
+  }
+
+  // 新宿などの都会での夜間光害スカイグロー (昼間・薄明時は太陽光にかき消されるため sunFade が十分に低いときに適用)
+  if (bortleScale >= 2 && sunFade < 0.15) {
+    ctx2d.save();
+    // 都会であるほど明るい青白・茶色グローが空全体にかかり、星空のコントラストが落ちる
+    const glowAlpha = ((bortleScale - 1) / 8.0) * 0.14 * (1.0 - sunFade);
+    ctx2d.fillStyle = `rgba(180, 195, 230, ${glowAlpha})`;
+    ctx2d.fillRect(0, 0, w, h);
+    ctx2d.restore();
+  }
+
+  if (sunFade * eclipseFade <= 0.01) return;
 
   const horizonAzimuths = [0, 45, 90, 135, 180, 225, 270, 315];
   const horizonScreenY: number[] = [];
@@ -687,7 +839,7 @@ function drawLightPollution(w: number, h: number, lst: number) {
   const gradHeight = Math.max(80, baseY - alt20Y);
 
   ctx2d.save();
-  ctx2d.globalAlpha = fadeAlpha * sunFade;
+  ctx2d.globalAlpha = fadeAlpha * sunFade * eclipseFade;
 
   {
     const grad = ctx2d.createLinearGradient(0, baseY, 0, baseY - gradHeight);
@@ -724,6 +876,7 @@ function drawLightPollution(w: number, h: number, lst: number) {
 
   ctx2d.restore();
 }
+
 
 function gradEstimate(h: number): number {
   if (!camera) return h * 0.25;
@@ -768,7 +921,58 @@ function updatePositionsAndRender() {
   const jd = getJulianDate(currentDate);
   const lst = getLocalSiderealTime(jd, longitude);
 
+  // --- 日食・月食の判定 ---
+  const sunData = planetsData.find(p => p.name === 'Sun');
+  const moonData = planetsData.find(p => p.name === 'Moon');
+  
+  isSolarEclipse = false;
+  eclipseRatio = 0.0;
+  isLunarEclipse = false;
+  lunarEclipseRatio = 0.0;
+
+  // ★ 月食・日食イベントが選択中の場合、現在時刻と食の進行タイムラインから直接計算
+  if (activeCelestialEventKey) {
+    const activeEv = CELESTIAL_EVENTS[activeCelestialEventKey];
+    if (activeEv && activeEv.eclipseType && activeEv.eclipseStart && activeEv.eclipsePeak && activeEv.eclipseEnd) {
+      const tStart = new Date(activeEv.eclipseStart).getTime();
+      const tPeak  = new Date(activeEv.eclipsePeak).getTime();
+      const tEnd   = new Date(activeEv.eclipseEnd).getTime();
+      const tNow   = currentDate.getTime();
+
+      let ratio = 0.0;
+      if (tNow >= tStart && tNow <= tPeak) {
+        // 食の始まり → 最大：線形に増加
+        ratio = (tNow - tStart) / (tPeak - tStart);
+      } else if (tNow > tPeak && tNow <= tEnd) {
+        // 食の最大 → 終わり：線形に減少
+        ratio = 1.0 - (tNow - tPeak) / (tEnd - tPeak);
+      }
+      ratio = Math.max(0.0, Math.min(1.0, ratio));
+
+      if (activeEv.eclipseType === 'lunar') {
+        isLunarEclipse = ratio > 0.01;
+        lunarEclipseRatio = ratio;
+      } else if (activeEv.eclipseType === 'solar') {
+        isSolarEclipse = ratio > 0.01;
+        eclipseRatio = ratio;
+      }
+    }
+  } else if (sunData && moonData) {
+    // 通常時の日食判定（天体位置から計算）
+    const dDec = sunData.dec - moonData.dec;
+    let dRa = (sunData.ra - moonData.ra) * 15.0;
+    if (dRa > 180.0) dRa -= 360.0;
+    if (dRa < -180.0) dRa += 360.0;
+    const angularDist = Math.sqrt(dRa * dRa + dDec * dDec);
+    if (angularDist < 1.0) {
+      isSolarEclipse = true;
+      eclipseRatio = Math.max(0.0, 1.0 - angularDist / 1.0);
+    }
+  }
+
+
   document.getElementById('stat-jd')!.textContent = jd.toFixed(5);
+
   const lstHrs = lst / 15.0;
   const lstH = Math.floor(lstHrs);
   const lstM = Math.floor((lstHrs - lstH) * 60);
@@ -939,6 +1143,7 @@ function updatePositionsAndRender() {
   }
 
   updateDsoPhotos(lst);
+  updateMeteors(lst);
   drawObservationMask(w, h);
 }
 
@@ -947,23 +1152,313 @@ function updatePositionsAndRender() {
 // ==========================================
 
 function drawPlanets(lst: number) {
+  // ★ 月食中は特別処理：月追尾中は画面中央にブラッドムーンを強制描画
+  if (isLunarEclipse && activeTrackPlanet === 'Moon' && observationMode !== 'none') {
+    const moonPlanet = planetsData.find(p => p.name === 'Moon');
+    if (moonPlanet) {
+      const ratio = lunarEclipseRatio;
+      // 月食ステージに応じた色計算
+      let r = Math.floor(255 * (1.0 - ratio) + 160 * ratio);
+      let g = Math.floor(253 * (1.0 - ratio) + 36 * ratio);
+      let b = Math.floor(231 * (1.0 - ratio) + 24 * ratio);
+
+      const cx = overlayCanvas.width / 2;
+      const cy = overlayCanvas.height / 2;
+
+      const fovDeg = camera.fov;
+      const pixPerDeg = overlayCanvas.height / fovDeg;
+      const baseSize = 0.25 * pixPerDeg; // 視半径 0.25度
+
+      // 月食のグロー（本影の赤色コロナ）
+      if (ratio > 0.3) {
+        ctx2d.save();
+        const glowRad = baseSize * (2.5 + ratio * 1.5);
+        const glowGrad = ctx2d.createRadialGradient(cx, cy, baseSize * 0.8, cx, cy, glowRad);
+        glowGrad.addColorStop(0.0, `rgba(${r}, ${Math.floor(g * 0.3)}, 0, ${0.4 * ratio})`);
+        glowGrad.addColorStop(0.5, `rgba(${r}, 0, 0, ${0.15 * ratio})`);
+        glowGrad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
+        ctx2d.beginPath();
+        ctx2d.arc(cx, cy, glowRad, 0, Math.PI * 2);
+        ctx2d.fillStyle = glowGrad;
+        ctx2d.fill();
+        ctx2d.restore();
+      }
+
+      // 月のハロー
+      const haloRadius = baseSize * 3.0;
+      const haloGrad = ctx2d.createRadialGradient(cx, cy, 0, cx, cy, haloRadius);
+      haloGrad.addColorStop(0.0,  `rgba(255, 255, 255, 0.9)`);
+      haloGrad.addColorStop(0.15, `rgba(${r}, ${g}, ${b}, 0.8)`);
+      haloGrad.addColorStop(0.45, `rgba(${r}, ${g}, ${b}, 0.3)`);
+      haloGrad.addColorStop(0.80, `rgba(${r}, ${Math.floor(g * 0.5)}, 0, 0.08)`);
+      haloGrad.addColorStop(1.0,  'rgba(0, 0, 0, 0)');
+      ctx2d.beginPath();
+      ctx2d.arc(cx, cy, haloRadius, 0, Math.PI * 2);
+      ctx2d.fillStyle = haloGrad;
+      ctx2d.fill();
+
+      // 月のディスク
+      const diskGrad = ctx2d.createRadialGradient(
+        cx - baseSize * 0.2, cy - baseSize * 0.2, 0,
+        cx, cy, baseSize
+      );
+      const gLight = Math.min(255, Math.floor(g * 1.5));
+      const bLight = Math.min(255, Math.floor(b * 1.5));
+      diskGrad.addColorStop(0,   `rgba(255, ${gLight}, ${bLight}, 1.0)`);
+      diskGrad.addColorStop(0.4, `rgba(${r}, ${g}, ${b}, 1.0)`);
+      diskGrad.addColorStop(1.0, `rgba(${Math.floor(r * 0.5)}, ${Math.floor(g * 0.3)}, ${Math.floor(b * 0.3)}, 0.9)`);
+      ctx2d.beginPath();
+      ctx2d.arc(cx, cy, baseSize, 0, Math.PI * 2);
+      ctx2d.fillStyle = diskGrad;
+      ctx2d.fill();
+
+
+      // 月のラベル
+      const labelOffset = baseSize * 3 + 8;
+      ctx2d.textAlign = 'left';
+      ctx2d.textBaseline = 'middle';
+      ctx2d.font = `bold 12px 'Outfit', sans-serif`;
+      const eclipseLabel = ratio > 0.95 ? `🌑 月 [皆既月食・ブラッドムーン]` : `🌒 月 [月食進行中 ${Math.round(ratio * 100)}%]`;
+      ctx2d.fillStyle = 'rgba(0,0,0,0.75)';
+      ctx2d.fillText(eclipseLabel, cx + labelOffset + 1, cy + 1);
+      ctx2d.fillStyle = `rgba(${r + 60 > 255 ? 255 : r + 60}, 80, 60, 0.95)`;
+      ctx2d.fillText(eclipseLabel, cx + labelOffset, cy);
+    }
+  }
+
+  // ★ 日食中は特別処理：太陽追尾中は画面中央に日食アニメーションを強制描画
+  if (isSolarEclipse && activeTrackPlanet === 'Sun' && observationMode !== 'none') {
+    const sunPlanet = planetsData.find(p => p.name === 'Sun');
+    if (sunPlanet) {
+      const ratio = eclipseRatio;
+      const cx = overlayCanvas.width / 2;
+      const cy = overlayCanvas.height / 2;
+      const fovDeg = camera.fov;
+      const pixPerDeg = overlayCanvas.height / fovDeg;
+      const sunRadius = 0.25 * pixPerDeg; // 太陽の視半径 0.25度
+
+      // 金環食か皆既食かを判定
+      const activeEv = activeCelestialEventKey ? CELESTIAL_EVENTS[activeCelestialEventKey] : null;
+      const isAnnular = activeEv?.eclipseSubType === 'annular';
+
+      // 月のディスクサイズ: 金環食では太陽より少し小さい、皆既食では同サイズ〜やや大きい
+      const moonRadius = isAnnular ? sunRadius * 0.90 : sunRadius * 1.02;
+
+      // eclipseRatioに基づいて月の位置をアニメーション
+      // ratio 0→1: 右端から中央へ移動、ratio 1→0: 中央から左端へ移動
+      const maxOffset = sunRadius * 2.5; // 月が太陽の外から入ってくる距離
+      let moonOffsetX: number;
+      if (ratio < 1.0) {
+        // 食の進行中: 月が右から左へ横切る
+        moonOffsetX = maxOffset * (1.0 - ratio);
+      } else {
+        moonOffsetX = 0; // 食の最大時は完全に中央
+      }
+      const moonCx = cx + moonOffsetX;
+      const moonCy = cy;
+
+      // --- コロナ描画（皆既食で深い食の時、または金環食のリング） ---
+      if (ratio > 0.5) {
+        ctx2d.save();
+        if (isAnnular && ratio > 0.8) {
+          // 金環食: 太陽のリング状コロナ（月の周囲に見える太陽光のリング）
+          const ringGlowRad = sunRadius * (3.0 + 0.5 * Math.sin(Date.now() * 0.006));
+          const ringGrad = ctx2d.createRadialGradient(cx, cy, sunRadius * 0.5, cx, cy, ringGlowRad);
+          ringGrad.addColorStop(0.0, `rgba(255, 220, 100, ${0.6 * ratio})`);
+          ringGrad.addColorStop(0.3, `rgba(255, 180, 60, ${0.35 * ratio})`);
+          ringGrad.addColorStop(0.6, `rgba(255, 120, 30, ${0.15 * ratio})`);
+          ringGrad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
+          ctx2d.beginPath();
+          ctx2d.arc(cx, cy, ringGlowRad, 0, Math.PI * 2);
+          ctx2d.fillStyle = ringGrad;
+          ctx2d.fill();
+        } else if (!isAnnular && ratio > 0.8) {
+          // 皆既食: 白いコロナ
+          const coronaRad = sunRadius * (4.2 + 0.8 * Math.sin(Date.now() * 0.008));
+          const coronaGrad = ctx2d.createRadialGradient(cx, cy, sunRadius * 0.8, cx, cy, coronaRad);
+          coronaGrad.addColorStop(0.0, `rgba(255, 255, 255, ${0.95 * ratio})`);
+          coronaGrad.addColorStop(0.15, `rgba(235, 245, 255, ${0.7 * ratio})`);
+          coronaGrad.addColorStop(0.4, `rgba(180, 210, 240, ${0.3 * ratio})`);
+          coronaGrad.addColorStop(0.7, `rgba(100, 140, 200, ${0.1 * ratio})`);
+          coronaGrad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
+          ctx2d.beginPath();
+          ctx2d.arc(cx, cy, coronaRad, 0, Math.PI * 2);
+          ctx2d.fillStyle = coronaGrad;
+          ctx2d.fill();
+        }
+        ctx2d.restore();
+      }
+
+      // --- 太陽のハロー ---
+      const haloRadius = sunRadius * 3.5;
+      const haloGrad = ctx2d.createRadialGradient(cx, cy, 0, cx, cy, haloRadius);
+      haloGrad.addColorStop(0.0, 'rgba(255, 255, 255, 0.95)');
+      haloGrad.addColorStop(0.1, 'rgba(255, 210, 80, 0.9)');
+      haloGrad.addColorStop(0.35, 'rgba(255, 180, 50, 0.45)');
+      haloGrad.addColorStop(0.70, 'rgba(255, 150, 30, 0.12)');
+      haloGrad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
+      ctx2d.beginPath();
+      ctx2d.arc(cx, cy, haloRadius, 0, Math.PI * 2);
+      ctx2d.fillStyle = haloGrad;
+      ctx2d.fill();
+
+      // --- 太陽ディスク ---
+      const sunDiskGrad = ctx2d.createRadialGradient(
+        cx - sunRadius * 0.2, cy - sunRadius * 0.2, 0,
+        cx, cy, sunRadius
+      );
+      sunDiskGrad.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
+      sunDiskGrad.addColorStop(0.4, 'rgba(255, 210, 80, 1.0)');
+      sunDiskGrad.addColorStop(1.0, 'rgba(230, 160, 40, 0.85)');
+      ctx2d.beginPath();
+      ctx2d.arc(cx, cy, sunRadius, 0, Math.PI * 2);
+      ctx2d.fillStyle = sunDiskGrad;
+      ctx2d.fill();
+
+      // --- 月影ディスク（太陽の上に重なる黒い円）---
+      if (ratio > 0.01) {
+        ctx2d.save();
+
+        if (isAnnular) {
+          // 金環食: 月は太陽より小さいので、重なっても太陽のリングが見える
+          ctx2d.beginPath();
+          ctx2d.arc(moonCx, moonCy, moonRadius, 0, Math.PI * 2);
+
+          // 月の暗部にもわずかな赤味を加える（大気屈折）
+          const moonDiskGrad = ctx2d.createRadialGradient(moonCx, moonCy, 0, moonCx, moonCy, moonRadius);
+          moonDiskGrad.addColorStop(0.0, 'rgba(8, 5, 15, 0.98)');
+          moonDiskGrad.addColorStop(0.7, 'rgba(5, 3, 12, 0.99)');
+          moonDiskGrad.addColorStop(1.0, 'rgba(2, 2, 8, 1.0)');
+          ctx2d.fillStyle = moonDiskGrad;
+          ctx2d.fill();
+
+          // 金環食のリング強調: 月の縁を微かに光らせる（太陽光の回折）
+          if (ratio > 0.85) {
+            const edgeGlow = ctx2d.createRadialGradient(moonCx, moonCy, moonRadius * 0.95, moonCx, moonCy, moonRadius * 1.15);
+            edgeGlow.addColorStop(0.0, 'rgba(255, 200, 80, 0.0)');
+            edgeGlow.addColorStop(0.4, `rgba(255, 220, 100, ${0.3 * ratio})`);
+            edgeGlow.addColorStop(1.0, 'rgba(255, 180, 60, 0.0)');
+            ctx2d.beginPath();
+            ctx2d.arc(moonCx, moonCy, moonRadius * 1.15, 0, Math.PI * 2);
+            ctx2d.fillStyle = edgeGlow;
+            ctx2d.fill();
+          }
+        } else {
+          // 皆既食: 月は太陽とほぼ同サイズ
+          ctx2d.beginPath();
+          ctx2d.arc(moonCx, moonCy, moonRadius, 0, Math.PI * 2);
+          ctx2d.fillStyle = '#02030b';
+          ctx2d.shadowColor = 'rgba(0, 0, 0, 0.9)';
+          ctx2d.shadowBlur = 5;
+          ctx2d.fill();
+
+          // ダイヤモンドリング: 食の始まりと終わりの瞬間（ratio 0.85-0.95くらい）
+          if (ratio > 0.80 && ratio < 0.96) {
+            const diamondAngle = ratio < 0.90 ? Math.PI * 0.15 : Math.PI * 1.85; // 右側 or 左側
+            const dx = moonCx + Math.cos(diamondAngle) * moonRadius * 0.95;
+            const dy = moonCy + Math.sin(diamondAngle) * moonRadius * 0.95;
+            const diamondRad = sunRadius * 0.4;
+            const diamondGrad = ctx2d.createRadialGradient(dx, dy, 0, dx, dy, diamondRad);
+            diamondGrad.addColorStop(0.0, 'rgba(255, 255, 255, 1.0)');
+            diamondGrad.addColorStop(0.2, 'rgba(255, 250, 230, 0.8)');
+            diamondGrad.addColorStop(0.5, 'rgba(255, 220, 150, 0.3)');
+            diamondGrad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
+            ctx2d.beginPath();
+            ctx2d.arc(dx, dy, diamondRad, 0, Math.PI * 2);
+            ctx2d.fillStyle = diamondGrad;
+            ctx2d.fill();
+          }
+        }
+        ctx2d.restore();
+      }
+
+      // ラベル
+      const labelOffset = sunRadius * 3 + 8;
+      ctx2d.textAlign = 'left';
+      ctx2d.textBaseline = 'middle';
+      ctx2d.font = `bold 12px 'Outfit', sans-serif`;
+      let eclipseLabel: string;
+      if (isAnnular) {
+        eclipseLabel = ratio > 0.95 ? `☀ 太陽 [金環日食・最大]` : `🌘 太陽 [金環日食 ${Math.round(ratio * 100)}%]`;
+      } else {
+        eclipseLabel = ratio > 0.95 ? `🌑 太陽 [皆既日食・コロナ]` : `🌘 太陽 [日食進行中 ${Math.round(ratio * 100)}%]`;
+      }
+      ctx2d.fillStyle = 'rgba(0,0,0,0.75)';
+      ctx2d.fillText(eclipseLabel, cx + labelOffset + 1, cy + 1);
+      ctx2d.fillStyle = isAnnular ? 'rgba(255, 200, 60, 0.95)' : 'rgba(200, 220, 255, 0.95)';
+      ctx2d.fillText(eclipseLabel, cx + labelOffset, cy);
+    }
+  }
+
   planetsData.forEach((planet) => {
     const hor = equatorialToHorizontal(planet.ra, planet.dec, lst, latitude);
     if (hor.alt < 0) return;
 
+    // 太陽は3D写真アセットがないため、望遠鏡モードで追尾中でもスキップせず2D描画を強制
+    // ただし日食の特別描画で太陽を描画済みの場合はスキップ
+    // 月は月食中に上の特別処理で描画済みなので、追尾中はスキップ
     if (activeTrackPlanet === planet.name && observationMode !== 'none') {
-      return;
+      if (planet.name === 'Sun' && isSolarEclipse) {
+        return; // 日食中の太陽は上の特別描画で描画済み
+      }
+      if (planet.name !== 'Sun') {
+        return; // 月食中の月は上で描画済み
+      }
     }
 
     const pos3d = horizonToCartesian(hor.az, hor.alt, DOME_RADIUS);
     const scr = getScreenPosition(pos3d, camera, overlayCanvas);
     if (!scr.visible) return;
 
-    const baseSize = Math.max(6, (1.0 - planet.mag) * 4 + 10);
+    let baseSize = Math.max(6, (1.0 - planet.mag) * 4 + 10);
+    // 双眼鏡・望遠鏡モードの時は、太陽と月を見かけの視直径（約0.5度）に合わせてズーム拡大
+    if (observationMode !== 'none' && (planet.name === 'Sun' || planet.name === 'Moon')) {
+      const fovDeg = camera.fov;
+      const pixPerDeg = overlayCanvas.height / fovDeg;
+      baseSize = 0.25 * pixPerDeg; // 視半径 0.25度
+    }
 
-    const r = parseInt(planet.color.slice(1, 3), 16);
-    const g = parseInt(planet.color.slice(3, 5), 16);
-    const b = parseInt(planet.color.slice(5, 7), 16);
+
+    let r = parseInt(planet.color.slice(1, 3), 16);
+    let g = parseInt(planet.color.slice(3, 5), 16);
+    let b = parseInt(planet.color.slice(5, 7), 16);
+
+    // 月食（ブラッドムーン）発生時は、食の度合いに応じて色調を赤褐色にシフト
+    if (planet.name === 'Moon' && isLunarEclipse) {
+      const ratio = lunarEclipseRatio;
+      r = Math.floor(r * (1.0 - ratio) + 160 * ratio); // 160 = 赤銅色の赤成分
+      g = Math.floor(g * (1.0 - ratio) + 36 * ratio);  // 36 = 緑成分
+      b = Math.floor(b * (1.0 - ratio) + 24 * ratio);  // 24 = 青成分
+    }
+
+    // 太陽のコロナ（日食が極めて深いときのみ、ディスク描画の前に背景に光輪として描く）
+    // 望遠鏡モードで太陽追尾中は上の特別描画でカバーされるのでスキップ
+    if (planet.name === 'Sun' && isSolarEclipse && eclipseRatio > 0.8 && !(activeTrackPlanet === 'Sun' && observationMode !== 'none')) {
+      ctx2d.save();
+      const activeEv = activeCelestialEventKey ? CELESTIAL_EVENTS[activeCelestialEventKey] : null;
+      const isAnnular = activeEv?.eclipseSubType === 'annular';
+      // ゆらぎ効果を入れて有機的に光り輝かせる
+      const coronaRad = baseSize * (4.2 + 0.8 * Math.sin(Date.now() * 0.008));
+      const coronaGrad = ctx2d.createRadialGradient(scr.x, scr.y, baseSize * 0.8, scr.x, scr.y, coronaRad);
+      if (isAnnular) {
+        // 金環食: 暖色系のコロナ
+        coronaGrad.addColorStop(0.0, `rgba(255, 220, 100, ${0.7 * eclipseRatio})`);
+        coronaGrad.addColorStop(0.3, `rgba(255, 180, 60, ${0.4 * eclipseRatio})`);
+        coronaGrad.addColorStop(0.6, `rgba(255, 120, 30, ${0.15 * eclipseRatio})`);
+        coronaGrad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
+      } else {
+        coronaGrad.addColorStop(0.0, 'rgba(255, 255, 255, 0.95)');
+        coronaGrad.addColorStop(0.2, 'rgba(235, 245, 255, 0.7)');
+        coronaGrad.addColorStop(0.5, 'rgba(160, 200, 240, 0.3)');
+        coronaGrad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
+      }
+      
+      ctx2d.beginPath();
+      ctx2d.arc(scr.x, scr.y, coronaRad, 0, Math.PI * 2);
+      ctx2d.fillStyle = coronaGrad;
+      ctx2d.fill();
+      ctx2d.restore();
+    }
 
     const haloRadius = baseSize * 3.5;
     const haloGrad = ctx2d.createRadialGradient(scr.x, scr.y, 0, scr.x, scr.y, haloRadius);
@@ -986,6 +1481,67 @@ function drawPlanets(lst: number) {
     ctx2d.arc(scr.x, scr.y, baseSize, 0, Math.PI * 2);
     ctx2d.fillStyle = diskGrad;
     ctx2d.fill();
+
+    // 日食時の月の影ディスクの重ね合わせ（太陽の上に重なる黒い円を描画）
+    // 望遠鏡モードで太陽追尾中は上の特別描画でカバーされるのでスキップ
+    if (planet.name === 'Sun' && isSolarEclipse && !(activeTrackPlanet === 'Sun' && observationMode !== 'none')) {
+      const ratio = eclipseRatio;
+      if (ratio > 0.01) {
+        // 金環食か皆既食かを判定
+        const activeEv = activeCelestialEventKey ? CELESTIAL_EVENTS[activeCelestialEventKey] : null;
+        const isAnnular = activeEv?.eclipseSubType === 'annular';
+        const moonDiskSize = isAnnular ? baseSize * 0.88 : baseSize * 0.98;
+
+        // eclipseRatioに基づいて月影の位置を太陽に対して計算
+        const maxOff = baseSize * 2.2;
+        const offsetX = maxOff * (1.0 - ratio);
+        const moonX = scr.x + offsetX;
+        const moonY = scr.y;
+
+        ctx2d.save();
+        ctx2d.beginPath();
+        ctx2d.arc(moonX, moonY, moonDiskSize, 0, Math.PI * 2);
+        ctx2d.fillStyle = '#02030b';
+        ctx2d.shadowColor = 'rgba(0, 0, 0, 0.9)';
+        ctx2d.shadowBlur = 3;
+        ctx2d.fill();
+        ctx2d.restore();
+      }
+    }
+
+    // 月食時の地球の影オーバーレイ（通常描画ルートの月にかかる影）
+    // 望遠鏡モードで月追尾中は上の特別描画でカバーされるのでスキップ
+    if (planet.name === 'Moon' && isLunarEclipse && lunarEclipseRatio > 0.01 && !(activeTrackPlanet === 'Moon' && observationMode !== 'none')) {
+      const ratio = lunarEclipseRatio;
+      ctx2d.save();
+
+      // 地球の影を半円形のオーバーレイとして描画
+      // ratio に応じて影の中心を月の右端から中央へ移動
+      const shadowOffsetX = baseSize * 1.5 * (1.0 - ratio);
+      const shadowRadius = baseSize * 1.8; // 地球の影は月より大きい
+
+      // クリッピング: 月のディスク内のみに影を描画
+      ctx2d.beginPath();
+      ctx2d.arc(scr.x, scr.y, baseSize, 0, Math.PI * 2);
+      ctx2d.clip();
+
+      // 地球の影（暗い赤褐色のグラデーション）
+      const shadowGrad = ctx2d.createRadialGradient(
+        scr.x + shadowOffsetX, scr.y, 0,
+        scr.x + shadowOffsetX, scr.y, shadowRadius
+      );
+      const shadowAlpha = Math.min(0.92, 0.5 + ratio * 0.42);
+      shadowGrad.addColorStop(0.0, `rgba(30, 8, 5, ${shadowAlpha})`);
+      shadowGrad.addColorStop(0.4, `rgba(60, 15, 10, ${shadowAlpha * 0.85})`);
+      shadowGrad.addColorStop(0.7, `rgba(40, 10, 8, ${shadowAlpha * 0.5})`);
+      shadowGrad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
+      ctx2d.beginPath();
+      ctx2d.arc(scr.x + shadowOffsetX, scr.y, shadowRadius, 0, Math.PI * 2);
+      ctx2d.fillStyle = shadowGrad;
+      ctx2d.fill();
+
+      ctx2d.restore();
+    }
 
     const isRecommended = planetRecommendation && planetRecommendation.name === planet.name;
     const isTracked = activeTrackPlanet === planet.name;
@@ -1356,7 +1912,124 @@ function drawObservationMask(w: number, h: number) {
   ctx2d.restore();
 }
 
+// ==========================================
+// 流星群（Meteor Showers）制御
+// ==========================================
+
+function updateMeteors(lst: number) {
+  // 1. 流星群トグルがONの時、確率的に流星を生成
+  if (showMeteors) {
+    const shower = METEOR_SHOWERS[activeMeteorShower];
+    if (shower) {
+      const hor = equatorialToHorizontal(shower.ra, shower.dec, lst, latitude);
+      
+      // 放射点（ラジアント）が地平線上にある時のみ流星が出現
+      if (hor.alt > 0) {
+        // 出現確率 (1フレームあたり約 2.5%, 同時最大25本)
+        if (Math.random() < 0.025 && activeMeteors.length < 25) {
+          createMeteor(hor.az, hor.alt, shower.color);
+        }
+      }
+    }
+  }
+
+  // 2. 既存の流星の更新・移動
+  const nextMeteors: ActiveMeteor[] = [];
+  activeMeteors.forEach((m) => {
+    m.life += m.decay;
+    if (m.life >= 1.0) {
+      // 寿命が尽きたらシーンから削除してリソース破棄
+      scene.remove(m.line);
+      m.line.geometry.dispose();
+      (m.line.material as THREE.Material).dispose();
+    } else {
+      // 流れ星の先端 (pStart) と末端 (pEnd) の3D位置を計算
+      const progress = m.life * 1.8; // 移動スピードの加速感
+      const pStart = m.origin.clone().addScaledVector(m.dir, progress * m.speed * DOME_RADIUS * 0.5);
+      // ドームの球面に沿うように投影
+      pStart.normalize().multiplyScalar(DOME_RADIUS * 0.95);
+      
+      const pEnd = pStart.clone().addScaledVector(m.dir, -m.length * DOME_RADIUS * 0.25);
+      pEnd.normalize().multiplyScalar(DOME_RADIUS * 0.95);
+
+      const positions = m.line.geometry.attributes.position.array as Float32Array;
+      positions[0] = pStart.x;
+      positions[1] = pStart.y;
+      positions[2] = pStart.z;
+      positions[3] = pEnd.x;
+      positions[4] = pEnd.y;
+      positions[5] = pEnd.z;
+      m.line.geometry.attributes.position.needsUpdate = true;
+
+      // フェードアウト効果 (中央が一番明るく、両端が薄くなる)
+      const mat = m.line.material as THREE.LineBasicMaterial;
+      mat.opacity = Math.sin(m.life * Math.PI) * 0.9;
+
+      nextMeteors.push(m);
+    }
+  });
+  activeMeteors = nextMeteors;
+}
+
+function createMeteor(radAz: number, radAlt: number, colorStr: string) {
+  // 放射点の3D基準ベクトル (ドームの球面上)
+  const radVector = horizonToCartesian(radAz, radAlt, DOME_RADIUS * 0.95);
+  const radNormal = radVector.clone().normalize();
+  
+  // 流星の開始点（放射点の座標の周辺に少し揺らぎを与える）
+  const origin = radVector.clone();
+  const offset = new THREE.Vector3(
+    (Math.random() - 0.5) * 60,
+    (Math.random() - 0.5) * 60,
+    (Math.random() - 0.5) * 60
+  );
+  origin.add(offset).normalize().multiplyScalar(DOME_RADIUS * 0.95);
+
+  // 流星の進行方向 (放射ベクトルに直交する接線ベクトル)
+  const tangent = new THREE.Vector3(1, 0, 0);
+  if (Math.abs(radNormal.x) > 0.9) {
+    tangent.set(0, 1, 0);
+  }
+  const dir = new THREE.Vector3().crossVectors(radNormal, tangent).normalize();
+  
+  // 放射点からランダムな角度 (360度方向) に飛び散るように回転
+  const angle = Math.random() * Math.PI * 2;
+  dir.applyAxisAngle(radNormal, angle);
+
+  // 2頂点 (始点・終点) の Float32Array バッファを生成
+  const positions = new Float32Array(6);
+  positions[0] = origin.x; positions[1] = origin.y; positions[2] = origin.z;
+  positions[3] = origin.x; positions[4] = origin.y; positions[5] = origin.z;
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+  const mat = new THREE.LineBasicMaterial({
+    color: new THREE.Color(colorStr),
+    transparent: true,
+    opacity: 0.0,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    linewidth: 1.5
+  });
+
+  const line = new THREE.Line(geo, mat);
+  line.frustumCulled = false;
+  scene.add(line);
+
+  activeMeteors.push({
+    line,
+    origin,
+    dir,
+    speed: 0.08 + Math.random() * 0.12,  // 毎フレームの移動量
+    length: 0.08 + Math.random() * 0.08, // 尾の長さ割合
+    life: 0.0,
+    decay: 0.025 + Math.random() * 0.045 // 寿命減少スピード
+  });
+}
+
 function buildDsoPhotos() {
+
   const loader = new THREE.TextureLoader();
   const dsoConfigs = [
     { id: 'M31', file: 'm31.png', ra: 0.7122, dec: 41.2692, scale: 30.0 },
@@ -1420,16 +2093,29 @@ function updateDsoPhotos(lst: number) {
   if (moonSprite) {
     const isTarget = activeTrackPlanet === 'Moon';
     const moonData = planetsData.find(p => p.name === 'Moon');
-    if (moonData && moonData.alt >= -5.0 && isTarget) {
+
+    // 月食中は3Dスプライトを非表示にして2D Canvas描画（ブラッドムーン）に任せる
+    if (isLunarEclipse && isTarget) {
+      moonSprite.visible = false;
+    } else if (moonData && isTarget) {
+      // LST から高度を再計算（moonData.alt は古い値の可能性があるため）
       const hor = equatorialToHorizontal(moonData.ra, moonData.dec, lst, latitude);
       const pos3d = horizonToCartesian(hor.az, hor.alt, DOME_RADIUS - 10);
       moonSprite.position.copy(pos3d);
-      moonSprite.visible = hor.alt >= 0 && maxOpacity > 0.05;
-      (moonSprite.material as THREE.SpriteMaterial).opacity = maxOpacity;
+
+      const isAboveHorizon = hor.alt >= 0;
+      const hasOpacity = maxOpacity > 0.05;
+      moonSprite.visible = isAboveHorizon && hasOpacity;
+
+      const mat = moonSprite.material as THREE.SpriteMaterial;
+      mat.opacity = maxOpacity;
+      mat.color.setRGB(1.0, 1.0, 1.0);
     } else {
       moonSprite.visible = false;
     }
   }
+
+
 
   const planetsToUpdate = ['Jupiter', 'Saturn', 'Venus', 'Mars'];
   planetsToUpdate.forEach(pid => {
@@ -1846,7 +2532,153 @@ function initEvents() {
   window.addEventListener('resize', resizeViewport);
   resizeViewport();
   setTimeout(resizeViewport, 100);
+
+  // --- 拡張機能：光害レベル (Bortle Scale) ---
+  const bortleScaleSlider = document.getElementById('bortle-scale') as HTMLInputElement;
+  const bortleLabel = document.getElementById('bortle-label')!;
+  if (bortleScaleSlider && bortleLabel) {
+    bortleScaleSlider.addEventListener('input', () => {
+      bortleScale = parseInt(bortleScaleSlider.value);
+      bortleLabel.textContent = String(bortleScale);
+      showToast(`光害レベルを Bortle ${bortleScale} に変更しました`, 'info');
+    });
+  }
+
+  // --- 拡張機能：流星群トグル & 種類 ---
+  const toggleMeteorsCheckbox = document.getElementById('toggle-meteors') as HTMLInputElement;
+  const meteorShowerSelect = document.getElementById('meteor-shower-select') as HTMLSelectElement;
+  
+  if (toggleMeteorsCheckbox && meteorShowerSelect) {
+    toggleMeteorsCheckbox.addEventListener('change', () => {
+      showMeteors = toggleMeteorsCheckbox.checked;
+      if (showMeteors) {
+        // 既存の流星をクリア
+        activeMeteors.forEach(m => {
+          scene.remove(m.line);
+          m.line.geometry.dispose();
+          (m.line.material as THREE.Material).dispose();
+        });
+        activeMeteors = [];
+        const showerName = METEOR_SHOWERS[activeMeteorShower]?.name || '流星群';
+        showToast(`${showerName} を表示します`, 'info');
+      } else {
+        showToast('流星群を非表示にしました', 'info');
+      }
+    });
+
+    meteorShowerSelect.addEventListener('change', () => {
+      activeMeteorShower = meteorShowerSelect.value;
+      if (showMeteors) {
+        const showerName = METEOR_SHOWERS[activeMeteorShower]?.name || '流星群';
+        showToast(`流星群を ${showerName} に切り替えました`, 'info');
+      }
+    });
+  }
+
+  // --- 拡張機能：天体イベントプリセット ---
+  const celestialEventSelect = document.getElementById('celestial-event-select') as HTMLSelectElement;
+  if (celestialEventSelect) {
+    celestialEventSelect.addEventListener('change', () => {
+      const eventKey = celestialEventSelect.value;
+      if (!eventKey) return;
+
+      const ev = CELESTIAL_EVENTS[eventKey];
+        if (ev) {
+        if (isTimelapseActive) stopTimelapse();
+
+        // ★ 月食・日食イベントとして記録（エフェクト制御に使用）
+        activeCelestialEventKey = eventKey;
+
+        latitude = ev.lat;
+        longitude = ev.lng;
+        currentDate = new Date(ev.date);
+
+
+        const latInput = document.getElementById('input-lat') as HTMLInputElement;
+        const lngInput = document.getElementById('input-lng') as HTMLInputElement;
+        const dateInput = document.getElementById('input-date') as HTMLInputElement;
+        const sitePreset = document.getElementById('site-preset') as HTMLSelectElement;
+        
+        if (latInput) latInput.value = String(latitude);
+        if (lngInput) lngInput.value = String(longitude);
+        if (dateInput) dateInput.value = formatDate(currentDate);
+        if (sitePreset) sitePreset.value = 'tokyo';
+
+        // イベント用オートタイムラプスの設定
+        if (ev.timelapseStart && ev.timelapseEnd) {
+          timelapseStartSimTime = new Date(ev.timelapseStart);
+          timelapseEndSimTime = new Date(ev.timelapseEnd);
+          timelapseDuration = 25000; // 25秒で食の開始から終了までを再生
+          currentDate = new Date(timelapseStartSimTime.getTime());
+          timelapseStartTime = Date.now();
+          isTimelapseActive = true;
+
+          const toggleBtn = document.getElementById('btn-timelapse-toggle')!;
+          if (toggleBtn) {
+            toggleBtn.textContent = 'タイムラプス停止';
+            toggleBtn.className = 'btn btn-danger';
+          }
+          const progressContainer = document.getElementById('timelapse-progress-container')!;
+          if (progressContainer) progressContainer.style.display = 'block';
+
+          const timeFlowCheckbox = document.getElementById('toggle-time-flow') as HTMLInputElement;
+          const speedSlider = document.getElementById('time-speed') as HTMLInputElement;
+          if (timeFlowCheckbox) timeFlowCheckbox.disabled = true;
+          if (speedSlider) speedSlider.disabled = true;
+          if (dateInput) dateInput.disabled = true;
+        }
+
+        loadFromAPI().then(() => {
+
+          if (ev.target && ev.target !== 'none') {
+            activeTrackPlanet = ev.target;
+            isPlanetLockOn = true;
+
+            const obsTargetSelect = document.getElementById('obs-target-select') as HTMLSelectElement;
+            const obsModeSelect = document.getElementById('obs-mode-select') as HTMLSelectElement;
+            const obsModeDetails = document.getElementById('obs-mode-details')!;
+            const obsModeDesc = document.getElementById('obs-mode-desc')!;
+            const lockCheckbox = document.getElementById('toggle-planet-lock') as HTMLInputElement;
+
+            if (obsTargetSelect) obsTargetSelect.value = ev.target;
+            if (obsModeSelect) obsModeSelect.value = 'telescope';
+            observationMode = 'telescope';
+            camera.fov = ev.fov || 1.5;
+            camera.updateProjectionMatrix();
+
+            setObsModeDescription(obsModeDesc, 'telescope');
+            if (obsModeDetails) obsModeDetails.style.display = 'block';
+            if (lockCheckbox) lockCheckbox.checked = true;
+
+            const initJd = getJulianDate(currentDate);
+            const initLst = getLocalSiderealTime(initJd, longitude);
+            
+            let targetAz: number | null = null;
+            let targetAlt: number | null = null;
+            
+            const trackP = planetsData.find(p => p.name === ev.target);
+            if (trackP) {
+              const hor = equatorialToHorizontal(trackP.ra, trackP.dec, initLst, latitude);
+              targetAz = hor.az;
+              targetAlt = hor.alt;
+            }
+
+            if (targetAz !== null && targetAlt !== null) {
+              guideTarget = { az: targetAz, alt: Math.max(12, targetAlt) };
+              isAutoRotatingToGuide = true;
+            }
+          }
+        });
+
+        showToast(`タイムトラベル: ${ev.name}`, 'info');
+        setTimeout(() => {
+          showToast(ev.description, 'info');
+        }, 2200);
+      }
+    });
+  }
 }
+
 
 // ==========================================
 // 更新ループ

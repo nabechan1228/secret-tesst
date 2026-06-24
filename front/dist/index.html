@@ -453,7 +453,7 @@
         #constellation-info-panel { width: 260px; }
       }
     </style>
-    <script type="module" crossorigin src="/assets/index-BFu0a06i.js"></script>
+    <script type="module" crossorigin src="/assets/index-dSrlsjgP.js"></script>
   </head>
   <body>
     <div id="app-container">
@@ -641,6 +641,50 @@
             </div>
           </div>
         </div>
+
+        <!-- 拡張機能 (Enhanced Features) -->
+        <div class="panel">
+          <div class="panel-title">Enhanced Features</div>
+          <div class="control-group">
+            <div class="control-row">
+              <label for="bortle-scale">光害 (Bortle): <span id="bortle-label" style="color:var(--accent);font-weight:bold;">4</span></label>
+            </div>
+            <input type="range" id="bortle-scale" min="1" max="9" value="4" step="1">
+
+            <hr class="divider">
+
+            <div class="control-row">
+              <label for="toggle-meteors">流星群 (Meteors)</label>
+              <label class="switch">
+                <input type="checkbox" id="toggle-meteors">
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="control-row">
+              <label for="meteor-shower-select">種類</label>
+              <select id="meteor-shower-select" style="width: 140px;">
+                <option value="perseids" selected>ペルセウス座流星群</option>
+                <option value="geminids">ふたご座流星群</option>
+                <option value="quadrantids">しぶんぎ座流星群</option>
+                <option value="lyrids">こと座流星群</option>
+              </select>
+            </div>
+
+            <hr class="divider">
+
+            <div class="control-row">
+              <label for="celestial-event-select">天体イベント</label>
+              <select id="celestial-event-select">
+                <option value="" selected>-- イベントを選択 --</option>
+                <option value="eclipse-2012">2012年 金環日食 (東京)</option>
+                <option value="eclipse-2022">2022年 皆既月食 (東京)</option>
+                <option value="eclipse-2026">2026年 皆既月食 (東京)</option>
+                <option value="conjunction-2020">2020年 木星・土星超大接近</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
 
         <!-- 表示設定 -->
         <div class="panel">
