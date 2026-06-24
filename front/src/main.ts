@@ -120,6 +120,15 @@ let activeGuideId: string | null = null;
 let guideTarget: { az: number; alt: number } | null = null;
 let isAutoRotatingToGuide = false;
 
+// クリックイベント判定用
+let mouseDownX = 0;
+let mouseDownY = 0;
+let mouseDownTime = 0;
+let touchStartX = 0;
+let touchStartY = 0;
+let touchStartTime = 0;
+
+
 // ==========================================
 // 拡張機能 (Enhanced Features) 状態
 // ==========================================
@@ -154,9 +163,11 @@ let activeMeteors: ActiveMeteor[] = [];
 
 // 日食・月食のリアルタイム計算状態
 let isSolarEclipse = false;
-let eclipseRatio = 0.0;
+let eclipseRatio = 0.0;        // 食の深さ (0→1→0): ピーク時に1
+let eclipsePhase = 0.0;        // 食の進行位相 (0→1): 開始→終了で線形増加（月の位置計算用）
 let isLunarEclipse = false;
-let lunarEclipseRatio = 0.0;
+let lunarEclipseRatio = 0.0;   // 月食の深さ (0→1→0)
+let lunarEclipsePhase = 0.0;   // 月食の進行位相 (0→1)
 
 // 現在選択中の天体イベント
 let activeCelestialEventKey: string | null = null;
@@ -572,6 +583,9 @@ async function loadFromAPI(): Promise<void> {
     if (metaRes.ok) {
       const metaData = await metaRes.json();
       constellationMeta = metaData.constellations;
+      console.log('DEBUG: Loaded constellationMeta. Size =', Object.keys(constellationMeta || {}).length);
+    } else {
+      console.error('DEBUG: metaRes not ok. status =', metaRes.status);
     }
 
     const skyData = await fetchSkyData();
@@ -927,8 +941,10 @@ function updatePositionsAndRender() {
   
   isSolarEclipse = false;
   eclipseRatio = 0.0;
+  eclipsePhase = 0.0;
   isLunarEclipse = false;
   lunarEclipseRatio = 0.0;
+  lunarEclipsePhase = 0.0;
 
   // ★ 月食・日食イベントが選択中の場合、現在時刻と食の進行タイムラインから直接計算
   if (activeCelestialEventKey) {
@@ -939,22 +955,34 @@ function updatePositionsAndRender() {
       const tEnd   = new Date(activeEv.eclipseEnd).getTime();
       const tNow   = currentDate.getTime();
 
+      // ratio: 食の深さ（0→1→0）— ピーク時に1
       let ratio = 0.0;
       if (tNow >= tStart && tNow <= tPeak) {
-        // 食の始まり → 最大：線形に増加
         ratio = (tNow - tStart) / (tPeak - tStart);
       } else if (tNow > tPeak && tNow <= tEnd) {
-        // 食の最大 → 終わり：線形に減少
         ratio = 1.0 - (tNow - tPeak) / (tEnd - tPeak);
       }
       ratio = Math.max(0.0, Math.min(1.0, ratio));
 
+      // phase: 食の進行位相（0→1）— 開始から終了まで線形に増加（影/月の移動位置計算用）
+      let phase = 0.0;
+      if (tNow < tStart) {
+        phase = 0.0;
+      } else if (tNow > tEnd) {
+        phase = 1.0;
+      } else {
+        phase = (tNow - tStart) / (tEnd - tStart);
+      }
+      phase = Math.max(0.0, Math.min(1.0, phase));
+
       if (activeEv.eclipseType === 'lunar') {
         isLunarEclipse = ratio > 0.01;
         lunarEclipseRatio = ratio;
+        lunarEclipsePhase = phase;
       } else if (activeEv.eclipseType === 'solar') {
         isSolarEclipse = ratio > 0.01;
         eclipseRatio = ratio;
+        eclipsePhase = phase;
       }
     }
   } else if (sunData && moonData) {
@@ -1157,10 +1185,7 @@ function drawPlanets(lst: number) {
     const moonPlanet = planetsData.find(p => p.name === 'Moon');
     if (moonPlanet) {
       const ratio = lunarEclipseRatio;
-      // 月食ステージに応じた色計算
-      let r = Math.floor(255 * (1.0 - ratio) + 160 * ratio);
-      let g = Math.floor(253 * (1.0 - ratio) + 36 * ratio);
-      let b = Math.floor(231 * (1.0 - ratio) + 24 * ratio);
+      const phase = lunarEclipsePhase;
 
       const cx = overlayCanvas.width / 2;
       const cy = overlayCanvas.height / 2;
@@ -1169,13 +1194,74 @@ function drawPlanets(lst: number) {
       const pixPerDeg = overlayCanvas.height / fovDeg;
       const baseSize = 0.25 * pixPerDeg; // 視半径 0.25度
 
-      // 月食のグロー（本影の赤色コロナ）
-      if (ratio > 0.3) {
+      // --- 月の元の色（通常白〜灰色）---
+      const moonR = 255, moonG = 253, moonB = 231;
+
+      // 月のハロー（通常の月光）
+      const haloRadius = baseSize * 3.0;
+      const haloGrad = ctx2d.createRadialGradient(cx, cy, 0, cx, cy, haloRadius);
+      haloGrad.addColorStop(0.0,  `rgba(255, 255, 255, 0.9)`);
+      haloGrad.addColorStop(0.15, `rgba(${moonR}, ${moonG}, ${moonB}, 0.8)`);
+      haloGrad.addColorStop(0.45, `rgba(${moonR}, ${moonG}, ${moonB}, 0.3)`);
+      haloGrad.addColorStop(0.80, `rgba(${moonR}, ${Math.floor(moonG * 0.5)}, 0, 0.08)`);
+      haloGrad.addColorStop(1.0,  'rgba(0, 0, 0, 0)');
+      ctx2d.beginPath();
+      ctx2d.arc(cx, cy, haloRadius, 0, Math.PI * 2);
+      ctx2d.fillStyle = haloGrad;
+      ctx2d.fill();
+
+      // 月のディスク（通常の明るい月面色）
+      const diskGrad = ctx2d.createRadialGradient(
+        cx - baseSize * 0.2, cy - baseSize * 0.2, 0,
+        cx, cy, baseSize
+      );
+      diskGrad.addColorStop(0,   `rgba(255, 255, 240, 1.0)`);
+      diskGrad.addColorStop(0.4, `rgba(${moonR}, ${moonG}, ${moonB}, 1.0)`);
+      diskGrad.addColorStop(1.0, `rgba(200, 195, 180, 0.9)`);
+      ctx2d.beginPath();
+      ctx2d.arc(cx, cy, baseSize, 0, Math.PI * 2);
+      ctx2d.fillStyle = diskGrad;
+      ctx2d.fill();
+
+      // --- 地球の影ディスク（月面上を横切る暗い円）---
+      // phaseに基づいて影が右→中央→左へ移動
+      const shadowDiskRadius = baseSize * 1.6; // 地球の本影は月より大きい
+      const maxShadowOffset = baseSize * 2.5;
+      // phase=0: 影は右端(+maxOffset), phase=0.5: 中央, phase=1: 左端(-maxOffset)
+      const shadowOffsetX = maxShadowOffset * (1.0 - 2.0 * phase);
+      const shadowCx = cx + shadowOffsetX;
+      const shadowCy = cy;
+
+      ctx2d.save();
+      // クリッピング: 月のディスク内のみに影を描画
+      ctx2d.beginPath();
+      ctx2d.arc(cx, cy, baseSize, 0, Math.PI * 2);
+      ctx2d.clip();
+
+      // 地球の影（暗い赤褐色のグラデーション — ブラッドムーン色）
+      const shadowGrad = ctx2d.createRadialGradient(
+        shadowCx, shadowCy, 0,
+        shadowCx, shadowCy, shadowDiskRadius
+      );
+      shadowGrad.addColorStop(0.0, 'rgba(15, 3, 2, 0.99)');    // 中心部は非常に暗い
+      shadowGrad.addColorStop(0.70, 'rgba(40, 10, 5, 0.98)');  // 本影内部（暗）
+      shadowGrad.addColorStop(0.85, 'rgba(100, 20, 10, 0.95)'); // 本影の境界付近
+      shadowGrad.addColorStop(0.92, 'rgba(160, 36, 24, 0.6)');  // 境界の遷移（赤みがかった半影）
+      shadowGrad.addColorStop(0.97, 'rgba(180, 50, 30, 0.15)'); // 半影の外縁
+      shadowGrad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
+      ctx2d.beginPath();
+      ctx2d.arc(shadowCx, shadowCy, shadowDiskRadius, 0, Math.PI * 2);
+      ctx2d.fillStyle = shadowGrad;
+      ctx2d.fill();
+      ctx2d.restore();
+
+      // 皆既時の赤い月面グロー
+      if (ratio > 0.7) {
         ctx2d.save();
         const glowRad = baseSize * (2.5 + ratio * 1.5);
         const glowGrad = ctx2d.createRadialGradient(cx, cy, baseSize * 0.8, cx, cy, glowRad);
-        glowGrad.addColorStop(0.0, `rgba(${r}, ${Math.floor(g * 0.3)}, 0, ${0.4 * ratio})`);
-        glowGrad.addColorStop(0.5, `rgba(${r}, 0, 0, ${0.15 * ratio})`);
+        glowGrad.addColorStop(0.0, `rgba(160, 12, 0, ${0.35 * ratio})`);
+        glowGrad.addColorStop(0.5, `rgba(120, 0, 0, ${0.12 * ratio})`);
         glowGrad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
         ctx2d.beginPath();
         ctx2d.arc(cx, cy, glowRad, 0, Math.PI * 2);
@@ -1184,44 +1270,15 @@ function drawPlanets(lst: number) {
         ctx2d.restore();
       }
 
-      // 月のハロー
-      const haloRadius = baseSize * 3.0;
-      const haloGrad = ctx2d.createRadialGradient(cx, cy, 0, cx, cy, haloRadius);
-      haloGrad.addColorStop(0.0,  `rgba(255, 255, 255, 0.9)`);
-      haloGrad.addColorStop(0.15, `rgba(${r}, ${g}, ${b}, 0.8)`);
-      haloGrad.addColorStop(0.45, `rgba(${r}, ${g}, ${b}, 0.3)`);
-      haloGrad.addColorStop(0.80, `rgba(${r}, ${Math.floor(g * 0.5)}, 0, 0.08)`);
-      haloGrad.addColorStop(1.0,  'rgba(0, 0, 0, 0)');
-      ctx2d.beginPath();
-      ctx2d.arc(cx, cy, haloRadius, 0, Math.PI * 2);
-      ctx2d.fillStyle = haloGrad;
-      ctx2d.fill();
-
-      // 月のディスク
-      const diskGrad = ctx2d.createRadialGradient(
-        cx - baseSize * 0.2, cy - baseSize * 0.2, 0,
-        cx, cy, baseSize
-      );
-      const gLight = Math.min(255, Math.floor(g * 1.5));
-      const bLight = Math.min(255, Math.floor(b * 1.5));
-      diskGrad.addColorStop(0,   `rgba(255, ${gLight}, ${bLight}, 1.0)`);
-      diskGrad.addColorStop(0.4, `rgba(${r}, ${g}, ${b}, 1.0)`);
-      diskGrad.addColorStop(1.0, `rgba(${Math.floor(r * 0.5)}, ${Math.floor(g * 0.3)}, ${Math.floor(b * 0.3)}, 0.9)`);
-      ctx2d.beginPath();
-      ctx2d.arc(cx, cy, baseSize, 0, Math.PI * 2);
-      ctx2d.fillStyle = diskGrad;
-      ctx2d.fill();
-
-
       // 月のラベル
       const labelOffset = baseSize * 3 + 8;
       ctx2d.textAlign = 'left';
       ctx2d.textBaseline = 'middle';
       ctx2d.font = `bold 12px 'Outfit', sans-serif`;
-      const eclipseLabel = ratio > 0.95 ? `🌑 月 [皆既月食・ブラッドムーン]` : `🌒 月 [月食進行中 ${Math.round(ratio * 100)}%]`;
+      const eclipseLabel = ratio > 0.95 ? `\u{1F311} 月 [皆既月食・ブラッドムーン]` : `\u{1F312} 月 [月食進行中 ${Math.round(ratio * 100)}%]`;
       ctx2d.fillStyle = 'rgba(0,0,0,0.75)';
       ctx2d.fillText(eclipseLabel, cx + labelOffset + 1, cy + 1);
-      ctx2d.fillStyle = `rgba(${r + 60 > 255 ? 255 : r + 60}, 80, 60, 0.95)`;
+      ctx2d.fillStyle = `rgba(220, 80, 60, 0.95)`;
       ctx2d.fillText(eclipseLabel, cx + labelOffset, cy);
     }
   }
@@ -1244,16 +1301,11 @@ function drawPlanets(lst: number) {
       // 月のディスクサイズ: 金環食では太陽より少し小さい、皆既食では同サイズ〜やや大きい
       const moonRadius = isAnnular ? sunRadius * 0.90 : sunRadius * 1.02;
 
-      // eclipseRatioに基づいて月の位置をアニメーション
-      // ratio 0→1: 右端から中央へ移動、ratio 1→0: 中央から左端へ移動
+      // eclipsePhaseに基づいて月の位置をアニメーション
+      // phase 0→1: 月が右端から左端へ太陽上を一方向に横切る
       const maxOffset = sunRadius * 2.5; // 月が太陽の外から入ってくる距離
-      let moonOffsetX: number;
-      if (ratio < 1.0) {
-        // 食の進行中: 月が右から左へ横切る
-        moonOffsetX = maxOffset * (1.0 - ratio);
-      } else {
-        moonOffsetX = 0; // 食の最大時は完全に中央
-      }
+      // phase=0: 右端(+maxOffset), phase=0.5(ピーク付近): 中央(0), phase=1: 左端(-maxOffset)
+      const moonOffsetX = maxOffset * (1.0 - 2.0 * eclipsePhase);
       const moonCx = cx + moonOffsetX;
       const moonCy = cy;
 
@@ -1492,9 +1544,9 @@ function drawPlanets(lst: number) {
         const isAnnular = activeEv?.eclipseSubType === 'annular';
         const moonDiskSize = isAnnular ? baseSize * 0.88 : baseSize * 0.98;
 
-        // eclipseRatioに基づいて月影の位置を太陽に対して計算
+        // eclipsePhaseに基づいて月影の位置を太陽に対して計算（右→中央→左）
         const maxOff = baseSize * 2.2;
-        const offsetX = maxOff * (1.0 - ratio);
+        const offsetX = maxOff * (1.0 - 2.0 * eclipsePhase);
         const moonX = scr.x + offsetX;
         const moonY = scr.y;
 
@@ -1516,8 +1568,8 @@ function drawPlanets(lst: number) {
       ctx2d.save();
 
       // 地球の影を半円形のオーバーレイとして描画
-      // ratio に応じて影の中心を月の右端から中央へ移動
-      const shadowOffsetX = baseSize * 1.5 * (1.0 - ratio);
+      // phaseに基づいて影の中心を右→中央→左へ移動
+      const shadowOffsetX = baseSize * 2.0 * (1.0 - 2.0 * lunarEclipsePhase);
       const shadowRadius = baseSize * 1.8; // 地球の影は月より大きい
 
       // クリッピング: 月のディスク内のみに影を描画
@@ -1531,9 +1583,11 @@ function drawPlanets(lst: number) {
         scr.x + shadowOffsetX, scr.y, shadowRadius
       );
       const shadowAlpha = Math.min(0.92, 0.5 + ratio * 0.42);
-      shadowGrad.addColorStop(0.0, `rgba(30, 8, 5, ${shadowAlpha})`);
-      shadowGrad.addColorStop(0.4, `rgba(60, 15, 10, ${shadowAlpha * 0.85})`);
-      shadowGrad.addColorStop(0.7, `rgba(40, 10, 8, ${shadowAlpha * 0.5})`);
+      shadowGrad.addColorStop(0.0, `rgba(15, 3, 2, ${shadowAlpha * 0.98})`);
+      shadowGrad.addColorStop(0.70, `rgba(30, 8, 5, ${shadowAlpha * 0.95})`);
+      shadowGrad.addColorStop(0.85, `rgba(60, 15, 10, ${shadowAlpha * 0.90})`);
+      shadowGrad.addColorStop(0.92, `rgba(100, 20, 15, ${shadowAlpha * 0.55})`);
+      shadowGrad.addColorStop(0.97, `rgba(120, 30, 20, ${shadowAlpha * 0.15})`);
       shadowGrad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
       ctx2d.beginPath();
       ctx2d.arc(scr.x + shadowOffsetX, scr.y, shadowRadius, 0, Math.PI * 2);
@@ -2175,6 +2229,70 @@ function updateDsoPhotos(lst: number) {
 }
 
 // ==========================================
+// 星空クリック時の星座選択処理
+// ==========================================
+
+function handleConstellationClick(clientX: number, clientY: number) {
+  if (Object.keys(constellationMeta).length === 0) return;
+
+  const rect = webglCanvas.getBoundingClientRect();
+  const mouseX = ((clientX - rect.left) / rect.width) * 2 - 1;
+  const mouseY = -((clientY - rect.top) / rect.height) * 2 + 1;
+
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(new THREE.Vector2(mouseX, mouseY), camera);
+  const dir = raycaster.ray.direction.clone().normalize();
+
+  // calculations.ts の horizonToCartesian の逆変換で azimuth (az) と altitude (alt) を計算
+  const altRad = Math.asin(Math.max(-1.0, Math.min(1.0, dir.y)));
+  const clickAlt = altRad * 180.0 / Math.PI;
+  const clickAz = (Math.atan2(dir.x, -dir.z) * 180.0 / Math.PI + 360.0) % 360.0;
+
+  const jd = getJulianDate(currentDate);
+  const lst = getLocalSiderealTime(jd, longitude);
+
+  let closestCid: string | null = null;
+  let minDistance = Infinity;
+  const maxDistanceThreshold = 18.0; // 選択閾値（度）
+
+  for (const cid in constellationMeta) {
+    const meta = constellationMeta[cid];
+    const hor = equatorialToHorizontal(meta.center_ra, meta.center_dec, lst, latitude);
+    
+    // 地平線下の星座は無視
+    if (hor.alt < 0) continue;
+
+    // クリックされた位置との角度差
+    const dAlt = clickAlt - hor.alt;
+    let dAz = clickAz - hor.az;
+    if (dAz > 180.0) dAz -= 360.0;
+    if (dAz < -180.0) dAz += 360.0;
+
+    // 天球上の距離
+    const dist = Math.sqrt(dAlt * dAlt + dAz * dAz * Math.cos(clickAlt * Math.PI / 180.0) * Math.cos(hor.alt * Math.PI / 180.0));
+
+    if (dist < minDistance) {
+      minDistance = dist;
+      closestCid = cid;
+    }
+  }
+
+  const constSelect = document.getElementById('constellation-select') as HTMLSelectElement;
+
+  if (closestCid && minDistance <= maxDistanceThreshold) {
+    showConstellationInfo(closestCid, constellationMeta);
+    if (constSelect) {
+      constSelect.value = closestCid;
+    }
+  } else {
+    hideConstellationInfo();
+    if (constSelect) {
+      constSelect.value = '';
+    }
+  }
+}
+
+// ==========================================
 // イベントリスナー
 // ==========================================
 
@@ -2387,6 +2505,11 @@ function initEvents() {
     activeTrackPlanet = null;
     startMouseX = e.clientX; startMouseY = e.clientY;
     startAzimuth = viewAzimuth; startAltitude = viewAltitude;
+
+    // クリック判定用
+    mouseDownX = e.clientX;
+    mouseDownY = e.clientY;
+    mouseDownTime = Date.now();
   });
 
   window.addEventListener('mousemove', (e) => {
@@ -2399,7 +2522,22 @@ function initEvents() {
     viewAltitude = Math.max(2.0, Math.min(89.9, startAltitude - dy * sensitivity));
   });
 
-  window.addEventListener('mouseup', () => { isDragging = false; });
+  window.addEventListener('mouseup', (e) => {
+    if (isDragging) {
+      isDragging = false;
+
+      // クリック判定
+      const dx = e.clientX - mouseDownX;
+      const dy = e.clientY - mouseDownY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const timeDiff = Date.now() - mouseDownTime;
+
+      // 移動量が非常に小さく、時間も短ければクリックとみなす
+      if (dist < 5 && timeDiff < 300) {
+        handleConstellationClick(e.clientX, e.clientY);
+      }
+    }
+  });
 
   let lastTouchX = 0, lastTouchY = 0;
   webglCanvas.addEventListener('touchstart', (e) => {
@@ -2415,6 +2553,11 @@ function initEvents() {
       lastTouchY = e.touches[0].clientY;
       startAzimuth = viewAzimuth;
       startAltitude = viewAltitude;
+
+      // タッチクリック判定用
+      touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+      touchStartTime = Date.now();
     }
   });
   webglCanvas.addEventListener('touchmove', (e) => {
@@ -2430,6 +2573,21 @@ function initEvents() {
       lastTouchY = e.touches[0].clientY;
     }
   }, { passive: false });
+
+  webglCanvas.addEventListener('touchend', (e) => {
+    if (e.changedTouches.length === 1) {
+      const touchEndX = e.changedTouches[0].clientX;
+      const touchEndY = e.changedTouches[0].clientY;
+      const dx = touchEndX - touchStartX;
+      const dy = touchEndY - touchStartY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const timeDiff = Date.now() - touchStartTime;
+
+      if (dist < 5 && timeDiff < 300) {
+        handleConstellationClick(touchEndX, touchEndY);
+      }
+    }
+  });
 
   webglCanvas.addEventListener('wheel', (e) => {
     e.preventDefault();
@@ -2814,8 +2972,11 @@ async function start() {
   init3D();
   initEvents();
   await loadFromAPI();
+  console.log('DEBUG: start before populate. Size =', Object.keys(constellationMeta || {}).length);
   if (Object.keys(constellationMeta).length > 0) {
     populateConstellationSelect(constellationMeta);
+  } else {
+    console.warn('DEBUG: constellationMeta is empty, skipping populateConstellationSelect');
   }
   showToast(`Stellaris 起動完了 - ${starsData.length}星 / 88星座 / 感星${planetsData.length}`, 'info');
   introStartTime = performance.now();
