@@ -61,12 +61,8 @@ export function setObsModeDescription(el: HTMLElement, mode: ObsMode) {
 }
 
 export function populateConstellationSelect(constellationMeta: Record<string, ConstellationMeta>) {
-  console.log('DEBUG: populateConstellationSelect start. keys =', Object.keys(constellationMeta || {}).length);
   const select = document.getElementById('constellation-select') as HTMLSelectElement;
-  if (!select) {
-    console.error('DEBUG: #constellation-select element not found!');
-    return;
-  }
+  if (!select) return;
 
   while (select.firstChild) select.removeChild(select.firstChild);
   const defaultOpt = document.createElement('option');
@@ -83,42 +79,31 @@ export function populateConstellationSelect(constellationMeta: Record<string, Co
   const grouped: Record<string, Array<[string, ConstellationMeta]>> = {};
   seasonOrder.forEach(s => grouped[s] = []);
 
-  try {
-    Object.entries(constellationMeta).forEach(([cid, meta]) => {
-      const season = meta.season || 'all';
-      if (!grouped[season]) grouped[season] = [];
-      grouped[season].push([cid, meta]);
-    });
-    console.log('DEBUG: grouped constellation sizes:', Object.keys(grouped).map(k => `${k}: ${grouped[k].length}`).join(', '));
-  } catch (e) {
-    console.error('DEBUG: Error during grouping:', e);
-  }
+  Object.entries(constellationMeta).forEach(([cid, meta]) => {
+    const season = meta.season || 'all';
+    if (!grouped[season]) grouped[season] = [];
+    grouped[season].push([cid, meta]);
+  });
 
   seasonOrder.forEach(season => {
-    try {
-      const entries = grouped[season];
-      if (!entries || entries.length === 0) return;
+    const entries = grouped[season];
+    if (!entries || entries.length === 0) return;
 
-      console.log(`DEBUG: sorting season ${season}, entries = ${entries.length}`);
-      entries.sort((a, b) => {
-        const jaA = a[1].name_ja || '';
-        const jaB = b[1].name_ja || '';
-        return jaA.localeCompare(jaB, 'ja');
-      });
+    entries.sort((a, b) => {
+      const jaA = a[1].name_ja || '';
+      const jaB = b[1].name_ja || '';
+      return jaA.localeCompare(jaB, 'ja');
+    });
 
-      const optgroup = document.createElement('optgroup');
-      optgroup.label = seasonNames[season];
-      entries.forEach(([cid, meta]) => {
-        const opt = document.createElement('option');
-        opt.value = cid;
-        opt.textContent = `${meta.name_ja} (${meta.name_en})`;
-        optgroup.appendChild(opt);
-      });
-      select.appendChild(optgroup);
-      console.log(`DEBUG: appended optgroup for ${season}. select child count = ${select.children.length}`);
-    } catch (e) {
-      console.error(`DEBUG: Error during populating season ${season}:`, e);
-    }
+    const optgroup = document.createElement('optgroup');
+    optgroup.label = seasonNames[season];
+    entries.forEach(([cid, meta]) => {
+      const opt = document.createElement('option');
+      opt.value = cid;
+      opt.textContent = `${meta.name_ja} (${meta.name_en})`;
+      optgroup.appendChild(opt);
+    });
+    select.appendChild(optgroup);
   });
 }
 

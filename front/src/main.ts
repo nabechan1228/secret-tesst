@@ -583,9 +583,6 @@ async function loadFromAPI(): Promise<void> {
     if (metaRes.ok) {
       const metaData = await metaRes.json();
       constellationMeta = metaData.constellations;
-      console.log('DEBUG: Loaded constellationMeta. Size =', Object.keys(constellationMeta || {}).length);
-    } else {
-      console.error('DEBUG: metaRes not ok. status =', metaRes.status);
     }
 
     const skyData = await fetchSkyData();
@@ -2453,8 +2450,32 @@ function initEvents() {
   const constSelect = document.getElementById('constellation-select') as HTMLSelectElement;
   constSelect.addEventListener('change', () => {
     const cid = constSelect.value;
-    if (cid) showConstellationInfo(cid, constellationMeta);
-    else hideConstellationInfo();
+    if (cid) {
+      showConstellationInfo(cid, constellationMeta);
+      
+      // 自動追尾等の状態をクリア
+      isAutoRotatingToGuide = false;
+      isPlanetLockOn = false;
+      const lockCheckbox = document.getElementById('toggle-planet-lock') as HTMLInputElement;
+      if (lockCheckbox) lockCheckbox.checked = false;
+      const obsTargetSelect = document.getElementById('obs-target-select') as HTMLSelectElement;
+      if (obsTargetSelect) obsTargetSelect.value = 'none';
+      activeTrackPlanet = null;
+
+      // 星座の中心位置へ自動回転
+      const meta = constellationMeta[cid];
+      if (meta && meta.center_ra !== undefined && meta.center_dec !== undefined) {
+        const jd = getJulianDate(currentDate);
+        const lst = getLocalSiderealTime(jd, longitude);
+        const hor = equatorialToHorizontal(meta.center_ra, meta.center_dec, lst, latitude);
+        
+        guideTarget = { az: hor.az, alt: Math.max(15, hor.alt) };
+        isAutoRotatingToGuide = true;
+        showToast(`${meta.name_ja} に視点を移動します`, 'info');
+      }
+    } else {
+      hideConstellationInfo();
+    }
   });
 
   document.getElementById('close-const-panel')?.addEventListener('click', () => {
@@ -2972,11 +2993,8 @@ async function start() {
   init3D();
   initEvents();
   await loadFromAPI();
-  console.log('DEBUG: start before populate. Size =', Object.keys(constellationMeta || {}).length);
   if (Object.keys(constellationMeta).length > 0) {
     populateConstellationSelect(constellationMeta);
-  } else {
-    console.warn('DEBUG: constellationMeta is empty, skipping populateConstellationSelect');
   }
   showToast(`Stellaris 起動完了 - ${starsData.length}星 / 88星座 / 感星${planetsData.length}`, 'info');
   introStartTime = performance.now();
