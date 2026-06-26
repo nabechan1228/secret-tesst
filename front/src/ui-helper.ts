@@ -88,7 +88,13 @@ export function populateConstellationSelect(constellationMeta: Record<string, Co
   seasonOrder.forEach(season => {
     const entries = grouped[season];
     if (!entries || entries.length === 0) return;
-    entries.sort((a, b) => a[1].name_ja.localeCompare(b[1].name_ja, 'ja'));
+
+    entries.sort((a, b) => {
+      const jaA = a[1].name_ja || '';
+      const jaB = b[1].name_ja || '';
+      return jaA.localeCompare(jaB, 'ja');
+    });
+
     const optgroup = document.createElement('optgroup');
     optgroup.label = seasonNames[season];
     entries.forEach(([cid, meta]) => {
