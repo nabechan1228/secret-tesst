@@ -23,6 +23,7 @@ import numpy as np
 from astro_loader import get_stars, get_constellation_lines, get_constellation_meta
 from planet_calc import get_planet_positions
 from dso_data import MESSIER_OBJECTS
+from satellites import get_satellites_position
 
 # ==========================================
 # ロギング設定
@@ -94,6 +95,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         "/api/sky": (120, 60),
         "/api/sky/stars-only": (120, 60),
         "/api/constellations": (120, 60),
+        "/api/satellites": (120, 60),
         "/health": (120, 60),
     }
     DEFAULT_LIMIT = (60, 60)
@@ -224,6 +226,21 @@ class SkyResponse(BaseModel):
     planets: List[PlanetOut]
     deep_sky_objects: List[DSOOut]
     recommendation: RecommendationOut
+
+class SatelliteOut(BaseModel):
+    id: str
+    name: str
+    name_ja: str
+    ra: float
+    dec: float
+    az: float
+    alt: float
+    mag: float
+    color: str
+    type: str
+
+class SatellitesResponse(BaseModel):
+    satellites: List[SatelliteOut]
 
 class ConstellationsResponse(BaseModel):
     constellations: Dict[str, Any]
@@ -661,6 +678,19 @@ def get_constellations():
     meta = get_constellation_meta()
     return {"constellations": meta}
 
+@app.get("/api/satellites", response_model=SatellitesResponse)
+def get_satellites(
+    lat: float = Query(35.68, ge=-90.0, le=90.0),
+    lng: float = Query(139.76, ge=-180.0, le=180.0),
+    time: Optional[str] = Query(None)
+):
+    """
+    指定された日時のISS等の人工衛星の位置を返す。
+    """
+    dt_utc, _, _ = parse_time_and_calc_lst(time, lng)
+    satellites = get_satellites_position(dt_utc, lat, lng)
+    return {"satellites": satellites}
+
 
 @app.get("/api/sky/stars-only")
 def get_stars_only(
@@ -697,6 +727,23 @@ def get_stars_only(
             })
 
     return {"stars": result, "julian_date": round(jd, 6), "lst_deg": round(lst, 4)}
+@app.get("/api/satellites")
+def get_satellites(
+    lat: float = Query(..., description="観測地の緯度 (度)"),
+    lng: float = Query(..., description="観測地の経度 (度)"),
+    time: str = Query(..., description="ISO8601形式の時刻 (UTC)"),
+):
+    """
+    指定日時・観測地における人工衛星（ISSなど）の地平座標を返すエンドポイント
+    """
+    try:
+        dt = datetime.fromisoformat(time.replace('Z', '+00:00'))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid time format. Use ISO8601.")
+        
+    sats = get_satellites_position(dt, lat, lng)
+    
+    return {"satellites": sats}
 
 
 @app.get("/health", response_model=HealthResponse)

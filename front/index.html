@@ -467,6 +467,18 @@
           <div id="loading-status">データ読み込み中...</div>
         </div>
 
+        <!-- 天体検索 (Search) -->
+        <div class="panel">
+          <div class="panel-title">Search Object</div>
+          <div class="control-group">
+            <div class="control-row" style="display: flex;">
+              <input type="text" id="search-box" placeholder="星や惑星の名前..." style="flex: 1; border-radius: 6px 0 0 6px; border-right: none;">
+              <button id="btn-search" class="btn btn-accent" style="padding: 6px 12px; border-radius: 0 6px 6px 0; border: 1px solid var(--accent);">検索</button>
+            </div>
+            <ul id="search-suggestions" style="display:none; list-style:none; padding:4px; margin:0; background:rgba(6,9,28,0.9); border:1px solid var(--panel-border); border-radius:4px; max-height:120px; overflow-y:auto; font-size:0.8rem;"></ul>
+          </div>
+        </div>
+
         <!-- 観測地 -->
         <div class="panel">
           <div class="panel-title">Observation Site</div>
@@ -491,6 +503,9 @@
               <label for="input-lng">経度 (°)</label>
               <input type="number" id="input-lng" step="0.1" min="-180" max="180" value="139.76">
             </div>
+            <button id="btn-gps" class="btn btn-accent" style="width:100%;padding:6px;border-radius:6px;font-weight:bold;margin-top:6px;">
+              📍 現在地を自動取得 (GPS)
+            </button>
           </div>
         </div>
 
@@ -514,6 +529,11 @@
               <span id="speed-label" style="font-size:0.8rem;color:var(--accent);min-width:36px;text-align:right;">1x</span>
             </div>
             <input type="range" id="time-speed" min="1" max="2000" value="1" step="1">
+            
+            <div class="control-row" style="margin-top: 6px;">
+              <label for="time-travel-slider" style="font-size:0.75rem;">タイムトラベル (±10年)</label>
+            </div>
+            <input type="range" id="time-travel-slider" min="-3650" max="3650" value="0" step="1">
           </div>
         </div>
 

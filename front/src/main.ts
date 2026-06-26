@@ -3,6 +3,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 
 import {
   StarData,
@@ -568,6 +569,12 @@ function init3D() {
 
   buildMilkyWay();
   buildDsoPhotos();
+
+  renderer.xr.enabled = true;
+  const vrButton = VRButton.createButton(renderer);
+  vrButton.style.bottom = '20px';
+  vrButton.style.zIndex = '9999';
+  document.body.appendChild(vrButton);
 }
 
 // ==========================================
@@ -2970,16 +2977,161 @@ async function refreshPlanetsAndDSO() {
   }
 }
 
+// ==========================================
+// 拡張機能ロジック (Tween, Satellites, Meteors, UI)
+// ==========================================
+
+interface TweenAnim { start: number; end: number; startTime: number; duration: number; onUpdate: (v: number) => void; onComplete?: () => void; }
+const tweens: TweenAnim[] = [];
+function updateTweens(now: number) {
+  for (let i = tweens.length - 1; i >= 0; i--) {
+    const t = tweens[i];
+    let p = (now - t.startTime) / t.duration;
+    if (p > 1) p = 1;
+    const ease = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+    t.onUpdate(t.start + (t.end - t.start) * ease);
+    if (p >= 1) {
+      if (t.onComplete) t.onComplete();
+      tweens.splice(i, 1);
+    }
+  }
+}
+function tweenTo(start: number, end: number, duration: number, onUpdate: (v:number)=>void, onComplete?: ()=>void) {
+  tweens.push({ start, end, startTime: performance.now(), duration, onUpdate, onComplete });
+}
+
+let satellitesData: any[] = [];
+let satellitesSprites: Map<string, THREE.Sprite> = new Map();
+async function fetchSatellites() {
+  const timeStr = encodeURIComponent(currentDate.toISOString());
+  try {
+    const res = await fetch(`${API_BASE}/api/satellites?lat=${latitude}&lng=${longitude}&time=${timeStr}`);
+    if (res.ok) {
+      const data = await res.json();
+      satellitesData = data.satellites || [];
+      updateSatelliteSprites();
+    }
+  } catch (err) {}
+}
+function updateSatelliteSprites() {
+  satellitesData.forEach(sat => {
+    let sprite = satellitesSprites.get(sat.id);
+    if (!sprite) {
+      const tex = createStarTexture(sat.color);
+      const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, blending: THREE.AdditiveBlending });
+      sprite = new THREE.Sprite(mat);
+      sprite.scale.set(8, 8, 1);
+      scene.add(sprite);
+      satellitesSprites.set(sat.id, sprite);
+    }
+    const { x, y, z } = horizonToCartesian(sat.az, sat.alt);
+    sprite.position.set(x, y, z);
+    sprite.visible = sat.alt > -5;
+  });
+}
+
+
+function focusOnObject(az: number, alt: number) {
+  let targetAz = az;
+  let diff = targetAz - viewAzimuth;
+  while (diff > 180) diff -= 360;
+  while (diff < -180) diff += 360;
+  tweenTo(viewAzimuth, viewAzimuth + diff, 1200, (v) => viewAzimuth = v);
+  tweenTo(viewAltitude, alt, 1200, (v) => viewAltitude = v);
+  tweenTo(baseFov, 25, 1200, (v) => { baseFov = v; camera.fov = baseFov; camera.updateProjectionMatrix(); });
+}
+
+function initEnhancedEvents() {
+  document.getElementById('btn-gps')?.addEventListener('click', () => {
+    if (navigator.geolocation) {
+      showToast('現在地を取得中...', 'info');
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          latitude = pos.coords.latitude;
+          longitude = pos.coords.longitude;
+          (document.getElementById('input-lat') as HTMLInputElement).value = latitude.toFixed(2);
+          (document.getElementById('input-lng') as HTMLInputElement).value = longitude.toFixed(2);
+          showToast('現在地を更新しました', 'info');
+          loadFromAPI();
+        },
+        () => showToast('現在地の取得に失敗しました', 'error')
+      );
+    }
+  });
+
+  const timeTravelSlider = document.getElementById('time-travel-slider') as HTMLInputElement;
+  if (timeTravelSlider) {
+    timeTravelSlider.addEventListener('input', (e) => {
+      const daysOffset = parseInt((e.target as HTMLInputElement).value, 10);
+      currentDate = new Date(Date.now() + daysOffset * 24 * 60 * 60 * 1000);
+      const dateInput = document.getElementById('input-date') as HTMLInputElement;
+      if (dateInput) dateInput.value = formatDate(currentDate);
+    });
+    timeTravelSlider.addEventListener('change', () => loadFromAPI());
+  }
+
+  const searchBox = document.getElementById('search-box') as HTMLInputElement;
+  const searchSuggests = document.getElementById('search-suggestions') as HTMLUListElement;
+  if (searchBox && searchSuggests) {
+    searchBox.addEventListener('input', () => {
+      const q = searchBox.value.toLowerCase();
+      searchSuggests.innerHTML = '';
+      if (!q) { searchSuggests.style.display = 'none'; return; }
+      const results: any[] = [];
+      starsData.forEach(s => { if ((s.name_ja && s.name_ja.toLowerCase().includes(q)) || (s.name && s.name.toLowerCase().includes(q))) results.push({...s, type: '恒星'}); });
+      planetsData.forEach(p => { if ((p.name_ja && p.name_ja.toLowerCase().includes(q)) || (p.name && p.name.toLowerCase().includes(q))) results.push({...p, type: '惑星'}); });
+      dsoData.forEach(d => { if ((d.name_ja && d.name_ja.toLowerCase().includes(q)) || (d.name_en && d.name_en.toLowerCase().includes(q)) || (d.name && d.name.toLowerCase().includes(q))) results.push({...d, type: 'DSO'}); });
+      satellitesData.forEach(sat => { if ((sat.name_ja && sat.name_ja.toLowerCase().includes(q)) || (sat.name && sat.name.toLowerCase().includes(q))) results.push({...sat, type: '衛星'}); });
+      
+      if (results.length > 0) {
+        searchSuggests.style.display = 'block';
+        results.slice(0, 5).forEach(r => {
+          const li = document.createElement('li');
+          li.textContent = `[${r.type}] ${r.name_ja || r.name}`;
+          li.style.cursor = 'pointer';
+          li.style.padding = '6px';
+          li.style.borderBottom = '1px solid rgba(255,255,255,0.1)';
+          li.style.color = '#fff';
+          li.onmouseover = () => li.style.background = 'rgba(0,188,212,0.3)';
+          li.onmouseout = () => li.style.background = 'transparent';
+          li.onclick = () => {
+            searchBox.value = '';
+            searchSuggests.style.display = 'none';
+            focusOnObject(r.az, r.alt);
+          };
+          searchSuggests.appendChild(li);
+        });
+      } else {
+        searchSuggests.style.display = 'none';
+      }
+    });
+  }
+
+  const toggleMeteors = document.getElementById('toggle-meteors') as HTMLInputElement;
+  if (toggleMeteors) {
+    toggleMeteors.addEventListener('change', (e) => {
+      showMeteors = (e.target as HTMLInputElement).checked;
+    });
+  }
+  const meteorShowerSelect = document.getElementById('meteor-shower-select') as HTMLSelectElement;
+  if (meteorShowerSelect) {
+    meteorShowerSelect.addEventListener('change', (e) => {
+      activeMeteorShower = (e.target as HTMLSelectElement).value;
+    });
+  }
+}
+
 function tick() {
   updateTime();
+  updateTweens(performance.now());
 
   const interval = isTimelapseActive ? PLANETS_DSO_TIMELAPSE_UPDATE_INTERVAL_MS : PLANETS_DSO_UPDATE_INTERVAL_MS;
   if (Date.now() - planetsDsoLastUpdate > interval) {
     refreshPlanetsAndDSO();
+    fetchSatellites();
   }
 
   updatePositionsAndRender();
-  requestAnimationFrame(tick);
 }
 
 // ==========================================
@@ -2992,13 +3144,15 @@ async function start() {
   initWorker();
   init3D();
   initEvents();
+  initEnhancedEvents();
   await loadFromAPI();
   if (Object.keys(constellationMeta).length > 0) {
     populateConstellationSelect(constellationMeta);
   }
-  showToast(`Stellaris 起動完了 - ${starsData.length}星 / 88星座 / 感星${planetsData.length}`, 'info');
+  showToast(`Stellaris 起動完了 - ${starsData.length}星 / 88星座 / 惑星${planetsData.length}`, 'info');
   introStartTime = performance.now();
-  tick();
+  
+  renderer.setAnimationLoop(tick);
 }
 
 window.addEventListener('DOMContentLoaded', start);
