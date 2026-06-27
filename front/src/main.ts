@@ -2944,7 +2944,14 @@ function updateTime() {
       showToast('タイムラプスが完了しました', 'info');
     }
   } else if (isTimeFlowing) {
-    currentDate = new Date(currentDate.getTime() + 16.7 * timeSpeed);
+    if (!window.hasOwnProperty('lastTimeUpdate')) {
+      (window as any).lastTimeUpdate = Date.now();
+    }
+    const now = Date.now();
+    const deltaMs = now - (window as any).lastTimeUpdate;
+    currentDate = new Date(currentDate.getTime() + deltaMs * timeSpeed);
+    (window as any).lastTimeUpdate = now;
+    
     const dateInput = document.getElementById('input-date') as HTMLInputElement;
     if (dateInput && document.activeElement !== dateInput) {
       dateInput.value = formatDate(currentDate);
