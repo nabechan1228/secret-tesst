@@ -727,24 +727,6 @@ def get_stars_only(
             })
 
     return {"stars": result, "julian_date": round(jd, 6), "lst_deg": round(lst, 4)}
-@app.get("/api/satellites")
-def get_satellites(
-    lat: float = Query(..., description="観測地の緯度 (度)"),
-    lng: float = Query(..., description="観測地の経度 (度)"),
-    time: str = Query(..., description="ISO8601形式の時刻 (UTC)"),
-):
-    """
-    指定日時・観測地における人工衛星（ISSなど）の地平座標を返すエンドポイント
-    """
-    try:
-        dt = datetime.fromisoformat(time.replace('Z', '+00:00'))
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid time format. Use ISO8601.")
-        
-    sats = get_satellites_position(dt, lat, lng)
-    
-    return {"satellites": sats}
-
 
 @app.get("/health", response_model=HealthResponse)
 def health():
@@ -761,4 +743,13 @@ def health():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    import os
+    watch_dir = os.path.dirname(os.path.abspath(__file__))
+    uvicorn.run(
+        "main:app", 
+        host="127.0.0.1", 
+        port=8000, 
+        reload=True, 
+        reload_dirs=[watch_dir],
+        reload_excludes=["data", "*.txt"]
+    )

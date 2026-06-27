@@ -6,7 +6,7 @@ from skyfield.api import Topos, load
 logger = logging.getLogger(__name__)
 
 # データディレクトリの準備 (TLEやleap secondsなどのキャッシュ用)
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # builtin=True でローカルの timescales データを使用し、外部依存を減らす
