@@ -68,3 +68,14 @@ export function getScreenPosition(
     visible: true
   };
 }
+
+export function getParallacticAngle(ra: number, dec: number, lstDeg: number, latDeg: number): number {
+  const HA = (lstDeg - ra * 15.0) * Math.PI / 180.0;
+  const decRad = dec * Math.PI / 180.0;
+  const latRad = latDeg * Math.PI / 180.0;
+  
+  const y = Math.sin(HA);
+  const x = Math.cos(decRad) * Math.tan(latRad) - Math.sin(decRad) * Math.cos(HA);
+  
+  return Math.atan2(y, x);
+}

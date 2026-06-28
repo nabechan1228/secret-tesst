@@ -69,11 +69,17 @@ let viewAltitude = 45;
 let baseFov = 85; // 超広角（人間の視野に近い85°）
 let observationMode: ObsMode = 'none';
 const dsoPhotoObjects: Map<string, THREE.Sprite> = new Map();
+const constellationArtObjects: Map<string, THREE.Mesh> = new Map();
 
 let showConstellations = true;
 let showStarNames = true;
 let showPlanets = true;
 let showDSO = true;
+
+export const ART_CONFIGS = [
+  { id: 'Ori', file: 'orion_v4.png', ra: 5.5883, dec: -5.39, scale: 800.0, rotationOffset: 0.0, offsetX: 0.0, offsetY: 0.0, flipX: false },
+  { id: 'UMa', file: 'ursa_major_v4.png', ra: 10.66, dec: 55.0, scale: 1200.0, rotationOffset: 0.0, offsetX: 0.0, offsetY: 0.0, flipX: false }
+];
 
 let isDragging = false;
 let startMouseX = 0;
@@ -968,7 +974,7 @@ function updatePositionsAndRender() {
       }
       ratio = Math.max(0.0, Math.min(1.0, ratio));
 
-      // phase: 食の進行位相（0→1）— 開始から終了まで線形に増加（影/月の移動位置計算用）
+      // phase: 食の進行位相（0→1）— 開始から終了まで線形に増加（影/月の位置計算用）
       let phase = 0.0;
       if (tNow < tStart) {
         phase = 0.0;
@@ -2113,11 +2119,15 @@ function buildDsoPhotos() {
     { id: 'NGC7000', file: 'ngc7000.png', ra: 20.983, dec: 44.333, scale: 26.0 },
     { id: 'NGC6960', file: 'ngc6960.png', ra: 20.762, dec: 30.714, scale: 20.0 },
     { id: 'NGC7293', file: 'ngc7293.png', ra: 22.493, dec: -20.835, scale: 16.0 },
-    { id: 'NGC6543', file: 'ngc6543.png', ra: 17.977, dec: 66.633, scale: 8.0 }
+    { id: 'NGC6543', file: 'ngc6543.png', ra: 17.977, dec: 66.633, scale: 8.0 },
+    { id: 'Mercury', file: 'mercury.png', ra: 0, dec: 0, scale: 3.0 },
+    { id: 'Uranus', file: 'uranus.png', ra: 0, dec: 0, scale: 3.0 },
+    { id: 'Neptune', file: 'neptune.png', ra: 0, dec: 0, scale: 3.0 },
+    { id: 'Pluto', file: 'pluto.png', ra: 0, dec: 0, scale: 2.5 }
   ];
 
   dsoConfigs.forEach(cfg => {
-    loader.load(`/assets/${cfg.file}`, (texture) => {
+    loader.load(`/assets/${cfg.file}?v=${Date.now()}`, (texture) => {
       texture.colorSpace = THREE.SRGBColorSpace;
       const material = new THREE.SpriteMaterial({
         map: texture,
@@ -2134,6 +2144,46 @@ function buildDsoPhotos() {
       console.log(`✓ Loaded astrophotography: ${cfg.id}`);
     }, undefined, (err) => {
       console.error(`Failed to load astrophotography asset: ${cfg.file}`, err);
+    });
+  });
+
+  // 星座絵
+  ART_CONFIGS.forEach(cfg => {
+    // 保存されたアライメント設定があれば復元する
+    const saved = localStorage.getItem(`art_${cfg.id}`);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        cfg.offsetX = parsed.offsetX ?? cfg.offsetX;
+        cfg.offsetY = parsed.offsetY ?? cfg.offsetY;
+        cfg.scale = parsed.scale ?? cfg.scale;
+        cfg.rotationOffset = parsed.rotationOffset ?? cfg.rotationOffset;
+        cfg.flipX = parsed.flipX ?? cfg.flipX;
+      } catch (e) {}
+    }
+
+    loader.load(`/assets/${cfg.file}?v=${Date.now()}`, (texture) => {
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const material = new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        blending: THREE.NormalBlending,
+        depthWrite: false,
+        opacity: 0.0,
+        side: THREE.BackSide // 球の内側から見るため
+      });
+      const geometry = new THREE.PlaneGeometry(1, 1);
+      const mesh = new THREE.Mesh(geometry, material);
+      // 裏側から見ているため左右反転してしまうのを防ぐため、基本Xスケールをマイナスにする
+      // さらに flipX が true ならもう一度反転（プラス）にする
+      const baseScaleX = cfg.flipX ? cfg.scale : -cfg.scale;
+      mesh.scale.set(baseScaleX, cfg.scale, 1);
+      mesh.visible = false;
+      scene.add(mesh);
+      constellationArtObjects.set(cfg.id, mesh);
+      console.log(`✓ Loaded constellation art: ${cfg.id}`);
+    }, undefined, (err) => {
+      console.error(`Failed to load constellation art: ${cfg.file}`, err);
     });
   });
 }
@@ -2175,7 +2225,7 @@ function updateDsoPhotos(lst: number) {
 
 
 
-  const planetsToUpdate = ['Jupiter', 'Saturn', 'Venus', 'Mars'];
+  const planetsToUpdate = ['Jupiter', 'Saturn', 'Venus', 'Mars', 'Mercury', 'Uranus', 'Neptune', 'Pluto'];
   planetsToUpdate.forEach(pid => {
     const sprite = dsoPhotoObjects.get(pid);
     if (sprite) {
@@ -2219,12 +2269,64 @@ function updateDsoPhotos(lst: number) {
     const sprite = dsoPhotoObjects.get(cfg.id);
     if (sprite) {
       const isTarget = activeTrackPlanet === cfg.id;
-      if (isTarget) {
-        const hor = equatorialToHorizontal(cfg.ra, cfg.dec, lst, latitude);
-        const pos3d = horizonToCartesian(hor.az, hor.alt, DOME_RADIUS - 15);
-        sprite.position.copy(pos3d);
-        sprite.visible = hor.alt >= 0 && maxOpacity > 0.05;
+      const hor = equatorialToHorizontal(cfg.ra, cfg.dec, lst, latitude);
+      const pos3d = horizonToCartesian(hor.az, hor.alt, DOME_RADIUS - 10);
+      sprite.position.copy(pos3d);
+      
+      const isAboveHorizon = hor.alt >= 0;
+      const isFOVMatched = fov <= 25.0; 
+      
+      if (isAboveHorizon && (isTarget || isFOVMatched) && maxOpacity > 0.05) {
+        sprite.visible = true;
         (sprite.material as THREE.SpriteMaterial).opacity = maxOpacity;
+      } else {
+        sprite.visible = false;
+      }
+    }
+  });
+
+  // 星座絵の更新 (星座線表示時のみ、FOVに応じたアルファ)
+  ART_CONFIGS.forEach(cfg => {
+    const sprite = constellationArtObjects.get(cfg.id);
+    if (sprite) {
+      if (!showConstellations) {
+        sprite.visible = false;
+        return;
+      }
+      // パララクティック角（日周運動に伴う天体の傾き）を計算してSpriteを回転させる
+      // const q = getParallacticAngle(cfg.ra, cfg.dec, lst, latitude);
+      
+      // オフセットを適用
+      const horOffset = equatorialToHorizontal(cfg.ra + cfg.offsetX, cfg.dec + cfg.offsetY, lst, latitude);
+      const pos3d = horizonToCartesian(horOffset.az, horOffset.alt, DOME_RADIUS - 20);
+      sprite.position.copy(pos3d);
+      
+      // 天球に張り付くようにメッシュの向きを外側へ向ける
+      sprite.lookAt(pos3d.x * 2, pos3d.y * 2, pos3d.z * 2);
+      
+      const isAboveHorizon = horOffset.alt >= -10; // 少し下まで描画
+      let artOpacity = 0.0;
+      
+      // 透過画像＋NormalBlending なので上限を上げてしっかり見えるようにする
+      if (fov >= 20.0) {
+        artOpacity = Math.min(0.5, (fov - 20.0) / 40.0); // 最大不透明度 0.5 (Bloomによる発光を抑えるため)
+      }
+      
+      if (isAboveHorizon && artOpacity > 0.01) {
+        sprite.visible = true;
+        const mat = sprite.material as THREE.MeshBasicMaterial;
+        mat.opacity = artOpacity;
+        // 天の北極（NCP）の方向を "上" とする
+        const ncpPos = horizonToCartesian(0, latitude, 1);
+        sprite.up.copy(ncpPos);
+        
+        // 独自オフセット（cfg.rotationOffset等）を考慮するため、一度リセットして適用
+        sprite.lookAt(pos3d.x * 2, pos3d.y * 2, pos3d.z * 2);
+        
+        // Parallactic Angle (q) による回転は不要になったため、手動オフセットのみ適用
+        const baseScaleX = cfg.flipX ? cfg.scale : -cfg.scale;
+        const sign = baseScaleX < 0 ? -1 : 1;
+        sprite.rotateZ(cfg.rotationOffset * sign);
       } else {
         sprite.visible = false;
       }
@@ -2715,6 +2817,67 @@ function initEvents() {
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
   };
+  
+  // デバッグ＆微調整用：星座絵のアライメント調整機能
+  window.addEventListener('keydown', (e) => {
+    if (!showConstellations) return;
+    
+    // 画面中央に一番近い星座絵を対象とする
+    const jd = getJulianDate(currentDate);
+    const lst = getLocalSiderealTime(jd, longitude);
+
+    let closestCfg: any = null;
+    let minDistance = Infinity;
+
+    ART_CONFIGS.forEach(c => {
+      const hor = equatorialToHorizontal(c.ra + c.offsetX, c.dec + c.offsetY, lst, latitude);
+      let azDiff = Math.abs(hor.az - viewAzimuth);
+      if (azDiff > 180) azDiff = 360 - azDiff;
+      const altDiff = Math.abs(hor.alt - viewAltitude);
+      const dist = Math.sqrt(azDiff*azDiff + altDiff*altDiff);
+      
+      if (dist < minDistance) {
+        minDistance = dist;
+        closestCfg = c;
+      }
+    });
+
+    if (!closestCfg || minDistance > 60) return; // 画面内に見えていなければ無視
+    const cfg = closestCfg;
+
+    const step = 0.5;
+    let changed = false;
+    if (e.key === 'ArrowUp') { cfg.offsetY += step; changed = true; }
+    if (e.key === 'ArrowDown') { cfg.offsetY -= step; changed = true; }
+    if (e.key === 'ArrowLeft') { cfg.offsetX -= step; changed = true; } // 右回りの空なので左は-RA
+    if (e.key === 'ArrowRight') { cfg.offsetX += step; changed = true; }
+    if (e.key === 'PageUp') { cfg.scale *= 1.05; changed = true; }
+    if (e.key === 'PageDown') { cfg.scale /= 1.05; changed = true; }
+    if (e.key === 'q' || e.key === 'Q') { cfg.rotationOffset -= 0.05; changed = true; }
+    if (e.key === 'e' || e.key === 'E') { cfg.rotationOffset += 0.05; changed = true; }
+    if (e.key === 'f' || e.key === 'F') { cfg.flipX = !cfg.flipX; changed = true; }
+
+    if (changed) {
+       console.log(`${cfg.id}: offsetX=${cfg.offsetX.toFixed(2)}, offsetY=${cfg.offsetY.toFixed(2)}, scale=${cfg.scale.toFixed(2)}, rotation=${cfg.rotationOffset.toFixed(2)}, flipX=${cfg.flipX}`);
+       const sprite = constellationArtObjects.get(cfg.id);
+       if (sprite) {
+         const baseScaleX = cfg.flipX ? cfg.scale : -cfg.scale;
+         sprite.scale.set(baseScaleX, cfg.scale, 1);
+       }
+       // LocalStorageに保存して次回起動時も維持する
+       localStorage.setItem(`art_${cfg.id}`, JSON.stringify({
+         offsetX: cfg.offsetX,
+         offsetY: cfg.offsetY,
+         scale: cfg.scale,
+         rotationOffset: cfg.rotationOffset,
+         flipX: cfg.flipX
+       }));
+       
+       // 画面上に調整状態を表示する
+       showToast(`調整保存: X:${cfg.offsetX.toFixed(1)} Y:${cfg.offsetY.toFixed(1)} 拡大:${cfg.scale.toFixed(0)} 回転:${cfg.rotationOffset.toFixed(2)} 反転:${cfg.flipX}`, 'info');
+    }
+  });
+
   window.addEventListener('resize', resizeViewport);
   resizeViewport();
   setTimeout(resizeViewport, 100);
@@ -3031,7 +3194,7 @@ function updateSatelliteSprites() {
       scene.add(sprite);
       satellitesSprites.set(sat.id, sprite);
     }
-    const { x, y, z } = horizonToCartesian(sat.az, sat.alt);
+    const { x, y, z } = horizonToCartesian(sat.az, sat.alt, DOME_RADIUS - 10);
     sprite.position.set(x, y, z);
     sprite.visible = sat.alt > -5;
   });
@@ -3085,9 +3248,9 @@ function initEnhancedEvents() {
       searchSuggests.innerHTML = '';
       if (!q) { searchSuggests.style.display = 'none'; return; }
       const results: any[] = [];
-      starsData.forEach(s => { if ((s.name_ja && s.name_ja.toLowerCase().includes(q)) || (s.name && s.name.toLowerCase().includes(q))) results.push({...s, type: '恒星'}); });
+      starsData.forEach(s => { if ((s.name_ja && s.name_ja.toLowerCase().includes(q))) results.push({...s, type: '恒星'}); });
       planetsData.forEach(p => { if ((p.name_ja && p.name_ja.toLowerCase().includes(q)) || (p.name && p.name.toLowerCase().includes(q))) results.push({...p, type: '惑星'}); });
-      dsoData.forEach(d => { if ((d.name_ja && d.name_ja.toLowerCase().includes(q)) || (d.name_en && d.name_en.toLowerCase().includes(q)) || (d.name && d.name.toLowerCase().includes(q))) results.push({...d, type: 'DSO'}); });
+      dsoData.forEach(d => { if ((d.name_ja && d.name_ja.toLowerCase().includes(q)) || (d.name_en && d.name_en.toLowerCase().includes(q))) results.push({...d, type: 'DSO'}); });
       satellitesData.forEach(sat => { if ((sat.name_ja && sat.name_ja.toLowerCase().includes(q)) || (sat.name && sat.name.toLowerCase().includes(q))) results.push({...sat, type: '衛星'}); });
       
       if (results.length > 0) {

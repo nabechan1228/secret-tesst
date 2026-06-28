@@ -56,3 +56,54 @@ export function createMilkyWayTexture(): THREE.Texture {
   ctx.fillRect(0, 0, 32, 32);
   return new THREE.CanvasTexture(canvas);
 }
+
+// プロシージャル惑星テクスチャ (水星, 天王星, 海王星, 冥王星用)
+export function createProceduralPlanetTexture(name: string): THREE.Texture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d')!;
+
+  const cx = 128, cy = 128, r = 120;
+
+  // 惑星ごとの色設定
+  let baseColor = '#aaaaaa', highlight = '#ffffff', shadow = '#333333';
+  if (name === 'Mercury') {
+    baseColor = '#9e9e9e'; highlight = '#d4d4d4'; shadow = '#4a4a4a';
+  } else if (name === 'Uranus') {
+    baseColor = '#a8e4e9'; highlight = '#d4f2f4'; shadow = '#5c9ba0';
+  } else if (name === 'Neptune') {
+    baseColor = '#2d68c4'; highlight = '#5f91e6'; shadow = '#13356e';
+  } else if (name === 'Pluto') {
+    baseColor = '#e0d0c0'; highlight = '#faecd9'; shadow = '#807060';
+  }
+
+  // 球面グラデーション
+  const grad = ctx.createRadialGradient(cx - r*0.3, cy - r*0.3, r*0.1, cx, cy, r);
+  grad.addColorStop(0.0, highlight);
+  grad.addColorStop(0.4, baseColor);
+  grad.addColorStop(0.9, shadow);
+  grad.addColorStop(1.0, '#000000');
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // 模様を追加（ノイズ）
+  ctx.globalCompositeOperation = 'overlay';
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+  for (let i = 0; i < 1000; i++) {
+    const nx = cx + (Math.random() - 0.5) * r * 1.8;
+    const ny = cy + (Math.random() - 0.5) * r * 1.8;
+    const nr = Math.random() * 10 + 2;
+    ctx.beginPath();
+    ctx.arc(nx, ny, nr, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}

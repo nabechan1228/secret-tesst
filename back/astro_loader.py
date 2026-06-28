@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-astro_loader.py
-astro_data.json を一度だけロードするユーティリティ
-インターネットから取得済みの天体データを提供する
+# astro_loader.py
+# astro_data.json を一度だけロードするユーティリティ (Updated to clear cache)
+# インターネットから取得済みの天体データを提供する
 """
 
 import json
