@@ -452,6 +452,16 @@
         #sidebar { width: 260px; min-width: 260px; }
         #constellation-info-panel { width: 260px; }
       }
+
+      /* ============ 天体写真撮影 ============ */
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+      @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
     </style>
   </head>
   <body>
@@ -664,6 +674,25 @@
             </div>
           </div>
         </div>
+        <!-- 天体写真撮影 (Astrophotography) -->
+        <div class="panel" id="astrophotography-panel" style="display:none;">
+          <div class="panel-title">Astrophotography</div>
+          <div class="control-group">
+            <div class="control-row">
+              <label for="astrophoto-exposure">露光時間: <span id="astrophoto-exposure-val" style="color:var(--accent);font-weight:bold;">10</span>秒</label>
+            </div>
+            <input type="range" id="astrophoto-exposure" min="2" max="60" value="10" step="1">
+
+            <div class="control-row">
+              <label for="astrophoto-iso">ISO感度: <span id="astrophoto-iso-val" style="color:var(--accent);font-weight:bold;">1600</span></label>
+            </div>
+            <input type="range" id="astrophoto-iso" min="100" max="12800" value="1600" step="100">
+
+            <button id="btn-astrophoto-capture" class="btn btn-accent" style="width:100%;padding:8px;border-radius:8px;font-weight:bold;margin-top:6px;">
+              📸 撮影を開始 (露出＆スタック)
+            </button>
+          </div>
+        </div>
 
         <!-- 拡張機能 (Enhanced Features) -->
         <div class="panel">
@@ -799,6 +828,49 @@
 
         <!-- トースト -->
         <div id="toast"></div>
+
+        <!-- 撮影中オーバーレイ -->
+        <div id="astrophoto-overlay" style="display:none; position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:200; align-items:center; justify-content:center; flex-direction:column; backdrop-filter:blur(10px);">
+          <div id="astrophoto-loader" style="position:relative; width:120px; height:120px; border-radius:50%; border:4px solid rgba(0,188,212,0.1); border-top-color:var(--accent); animation:spin 2s linear infinite; margin-bottom:20px;">
+            <div id="astrophoto-progress-text" style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); color:var(--text-primary); font-size:1.1rem; font-weight:bold; font-family:monospace;">0%</div>
+          </div>
+          <div id="astrophoto-status-text" style="color:var(--accent); font-weight:bold; font-size:1rem; margin-bottom:8px; text-shadow:0 0 10px var(--accent-glow);">シャッター解放中...</div>
+          <div id="astrophoto-sub-status" style="color:var(--text-secondary); font-size:0.8rem;">ノイズ除去中 & スタッキング実行中 (0 / 0 フレーム)</div>
+          <!-- スタッキング中の天体プレビュー (徐々にノイズが減っていく) -->
+          <div style="position:relative; width:280px; height:210px; margin-top:20px; border-radius:12px; border:1px solid var(--panel-border); overflow:hidden; background:#020208;">
+            <img id="astrophoto-preview-img" style="width:100%; height:100%; object-fit:cover; filter:blur(4px) opacity(0.3); transition:filter 0.5s;" src="">
+            <canvas id="astrophoto-noise-canvas" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; mix-blend-mode:screen; opacity:0.8;"></canvas>
+          </div>
+        </div>
+
+        <!-- 撮影結果カードモーダル -->
+        <div id="astrophoto-card-modal" style="display:none; position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:210; align-items:center; justify-content:center; backdrop-filter:blur(8px);">
+          <div class="panel" style="width:420px; display:flex; flex-direction:column; gap:16px; align-items:stretch; animation:fadeInUp 0.3s ease-out; position:relative; box-shadow:0 25px 50px rgba(0,0,0,0.8);">
+            <button id="btn-close-photo-modal" style="position:absolute; top:12px; right:12px; background:none; border:none; color:var(--text-secondary); font-size:1.2rem; cursor:pointer; z-index:10;">✕</button>
+            <div class="panel-title" style="margin-bottom:4px;">Astrophotography Card</div>
+            
+            <!-- 現像された写真カード本体 -->
+            <div id="astrophoto-card-container" style="background:#fff; color:#111; padding:16px; border-radius:8px; box-shadow:0 10px 30px rgba(0,0,0,0.5); font-family:'Noto Sans JP', sans-serif;">
+              <div style="width:100%; aspect-ratio:4/3; background:#000; border-radius:4px; overflow:hidden; position:relative;">
+                <img id="astrophoto-final-image" style="width:100%; height:100%; object-fit:cover;" src="">
+              </div>
+              <div style="margin-top:12px; border-top:1px solid #ddd; padding-top:12px;">
+                <div style="font-size:1.1rem; font-weight:bold; color:#222; text-align:left;" id="astrophoto-card-target-name">アンドロメダ銀河 (M31)</div>
+                <div style="font-size:0.75rem; color:#666; margin-top:2px; text-align:left;" id="astrophoto-card-target-type">渦巻銀河 (DSO)</div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px 12px; margin-top:10px; font-size:0.7rem; color:#444; border-top:1px dashed #eee; padding-top:8px; font-family:monospace; text-align:left;">
+                  <div>📅 DATE: <span id="astrophoto-card-date">-</span></div>
+                  <div>📍 LOC: <span id="astrophoto-card-loc">-</span></div>
+                  <div>⏱ EXP: <span id="astrophoto-card-exp">-</span></div>
+                  <div>⚡ ISO: <span id="astrophoto-card-iso">-</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div style="display:flex; gap:10px; margin-top:6px;">
+              <button id="btn-astrophoto-download" class="btn btn-accent" style="flex:1; padding:10px; border-radius:8px; font-weight:bold;">💾 保存 (PNGダウンロード)</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 

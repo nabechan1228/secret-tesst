@@ -96,6 +96,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         "/api/sky/stars-only": (120, 60),
         "/api/constellations": (120, 60),
         "/api/satellites": (120, 60),
+        "/api/meteor-showers": (120, 60),
         "/health": (120, 60),
     }
     DEFAULT_LIMIT = (60, 60)
@@ -244,6 +245,20 @@ class SatellitesResponse(BaseModel):
 
 class ConstellationsResponse(BaseModel):
     constellations: Dict[str, Any]
+
+class MeteorShowerOut(BaseModel):
+    id: str
+    name: str
+    name_ja: str
+    ra: float
+    dec: float
+    activity: float
+    zhr: int
+    color: str
+
+class MeteorShowersResponse(BaseModel):
+    datetime: str
+    showers: List[MeteorShowerOut]
 
 class HealthResponse(BaseModel):
     status: str
@@ -727,6 +742,110 @@ def get_stars_only(
             })
 
     return {"stars": result, "julian_date": round(jd, 6), "lst_deg": round(lst, 4)}
+
+@app.get("/api/meteor-showers", response_model=MeteorShowersResponse)
+def get_meteor_showers(
+    time: Optional[str] = Query(None, description="ISO 8601 日時文字列。省略時は現在のUTC時刻"),
+):
+    """
+    指定日付における主要な流星群の活動度と放射点データを返す。
+    """
+    if time:
+        try:
+            dt = datetime.fromisoformat(time.replace('Z', '+00:00'))
+        except ValueError:
+            dt = datetime.now(timezone.utc)
+    else:
+        dt = datetime.now(timezone.utc)
+
+    dt_utc = dt.astimezone(timezone.utc)
+    year = dt_utc.year
+
+    showers_def = [
+        {
+            "id": "quadrantids",
+            "name": "Quadrantids",
+            "name_ja": "しぶんぎ座流星群",
+            "peak_month": 1,
+            "peak_day": 4,
+            "ra": 15.3,
+            "dec": 49.0,
+            "zhr": 120,
+            "sigma": 3.0,
+            "color": "#e1bee7"
+        },
+        {
+            "id": "lyrids",
+            "name": "Lyrids",
+            "name_ja": "こと座流星群",
+            "peak_month": 4,
+            "peak_day": 22,
+            "ra": 18.2,
+            "dec": 34.0,
+            "zhr": 18,
+            "sigma": 4.0,
+            "color": "#f1f8e9"
+        },
+        {
+            "id": "perseids",
+            "name": "Perseids",
+            "name_ja": "ペルセウス座流星群",
+            "peak_month": 8,
+            "peak_day": 13,
+            "ra": 3.1,
+            "dec": 58.0,
+            "zhr": 100,
+            "sigma": 10.0,
+            "color": "#e0f7fa"
+        },
+        {
+            "id": "geminids",
+            "name": "Geminids",
+            "name_ja": "ふたご座流星群",
+            "peak_month": 12,
+            "peak_day": 14,
+            "ra": 7.5,
+            "dec": 33.0,
+            "zhr": 120,
+            "sigma": 5.0,
+            "color": "#fff9c4"
+        }
+    ]
+
+    active_showers = []
+    for s in showers_def:
+        try:
+            peak_dt = datetime(year, s["peak_month"], s["peak_day"], tzinfo=timezone.utc)
+        except ValueError:
+            peak_dt = datetime(year, s["peak_month"], s["peak_day"] - 1, tzinfo=timezone.utc)
+
+        diff_days = (dt_utc - peak_dt).total_seconds() / 86400.0
+
+        if diff_days > 180:
+            peak_dt_prev = datetime(year - 1, s["peak_month"], s["peak_day"], tzinfo=timezone.utc)
+            diff_days = (dt_utc - peak_dt_prev).total_seconds() / 86400.0
+        elif diff_days < -180:
+            peak_dt_next = datetime(year + 1, s["peak_month"], s["peak_day"], tzinfo=timezone.utc)
+            diff_days = (dt_utc - peak_dt_next).total_seconds() / 86400.0
+
+        activity = math.exp(- (diff_days / s["sigma"]) ** 2)
+
+        if activity >= 0.01:
+            active_showers.append({
+                "id": s["id"],
+                "name": s["name"],
+                "name_ja": s["name_ja"],
+                "ra": s["ra"],
+                "dec": s["dec"],
+                "activity": round(activity, 4),
+                "zhr": s["zhr"],
+                "color": s["color"]
+            })
+
+    return {
+        "datetime": dt_utc.isoformat(),
+        "showers": active_showers
+    }
 
 @app.get("/health", response_model=HealthResponse)
 def health():

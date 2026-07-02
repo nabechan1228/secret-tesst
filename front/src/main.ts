@@ -1120,6 +1120,7 @@ function updatePositionsAndRender() {
     bloomPass.threshold = Math.max(0.0, 0.15 * (zoomFactor - 0.5));
   }
 
+  updateLightPollutionFog();
   composer.render();
 
   ctx2d.clearRect(0, 0, w, h);
@@ -1983,15 +1984,21 @@ function drawObservationMask(w: number, h: number) {
 function updateMeteors(lst: number) {
   // 1. 流星群トグルがONの時、確率的に流星を生成
   if (showMeteors) {
+    fetchMeteorShowersActivity();
+
     const shower = METEOR_SHOWERS[activeMeteorShower];
     if (shower) {
-      const hor = equatorialToHorizontal(shower.ra, shower.dec, lst, latitude);
-      
-      // 放射点（ラジアント）が地平線上にある時のみ流星が出現
-      if (hor.alt > 0) {
-        // 出現確率 (1フレームあたり約 2.5%, 同時最大25本)
-        if (Math.random() < 0.025 && activeMeteors.length < 25) {
-          createMeteor(hor.az, hor.alt, shower.color);
+      const activityData = currentMeteorShowersActivity.get(activeMeteorShower);
+      if (activityData && activityData.activity > 0) {
+        const hor = equatorialToHorizontal(shower.ra, shower.dec, lst, latitude);
+        
+        // 放射点（ラジアント）が地平線上にある時のみ流星が出現
+        if (hor.alt > 0) {
+          // 出現確率は活動係数 (0.0〜1.0) に比例して最大 4% まで変化
+          const spawnChance = 0.04 * activityData.activity;
+          if (Math.random() < spawnChance && activeMeteors.length < 30) {
+            createMeteor(hor.az, hor.alt, shower.color, activityData.activity);
+          }
         }
       }
     }
@@ -2035,7 +2042,7 @@ function updateMeteors(lst: number) {
   activeMeteors = nextMeteors;
 }
 
-function createMeteor(radAz: number, radAlt: number, colorStr: string) {
+function createMeteor(radAz: number, radAlt: number, colorStr: string, activity: number = 1.0) {
   // 放射点の3D基準ベクトル (ドームの球面上)
   const radVector = horizonToCartesian(radAz, radAlt, DOME_RADIUS * 0.95);
   const radNormal = radVector.clone().normalize();
@@ -2085,8 +2092,8 @@ function createMeteor(radAz: number, radAlt: number, colorStr: string) {
     line,
     origin,
     dir,
-    speed: 0.08 + Math.random() * 0.12,  // 毎フレームの移動量
-    length: 0.08 + Math.random() * 0.08, // 尾の長さ割合
+    speed: (0.08 + Math.random() * 0.12) * (0.8 + activity * 0.4),  // 毎フレームの移動量
+    length: (0.08 + Math.random() * 0.08) * (0.9 + activity * 0.2), // 尾の長さ割合
     life: 0.0,
     decay: 0.025 + Math.random() * 0.045 // 寿命減少スピード
   });
@@ -2456,6 +2463,7 @@ function initEvents() {
       const lockCheckbox = document.getElementById('toggle-planet-lock') as HTMLInputElement;
       if (lockCheckbox) lockCheckbox.checked = false;
       showToast('追尾を解除しました', 'info');
+      updateAstrophotographyPanelVisibility();
       return;
     }
 
@@ -2512,6 +2520,7 @@ function initEvents() {
     } else {
       showToast('ターゲットの位置を計算できませんでした。', 'error');
     }
+    updateAstrophotographyPanelVisibility();
   });
 
   obsModeSelect.addEventListener('change', () => {
@@ -2543,6 +2552,7 @@ function initEvents() {
       obsModeDetails.style.display = 'block';
       showToast('望遠鏡モード (実視野 1.0°) に切り替えました', 'info');
     }
+    updateAstrophotographyPanelVisibility();
   });
 
   const constellationCheckbox = document.getElementById('toggle-constellations') as HTMLInputElement;
@@ -2890,6 +2900,7 @@ function initEvents() {
       bortleScale = parseInt(bortleScaleSlider.value);
       bortleLabel.textContent = String(bortleScale);
       showToast(`光害レベルを Bortle ${bortleScale} に変更しました`, 'info');
+      updateLightPollutionFog();
     });
   }
 
@@ -3291,6 +3302,361 @@ function initEnhancedEvents() {
   }
 }
 
+// ==========================================
+// 天体写真撮影 (Astrophotography) & 光害 & 流星群同期の実装
+// ==========================================
+
+const BORTLE_FOG_CONFIGS: Record<number, { color: number; density: number }> = {
+  1: { color: 0x010103, density: 0.0001 },
+  2: { color: 0x020206, density: 0.0002 },
+  3: { color: 0x03040a, density: 0.0003 },
+  4: { color: 0x040510, density: 0.00035 },
+  5: { color: 0x060818, density: 0.0005 },
+  6: { color: 0x0b0c22, density: 0.0008 },
+  7: { color: 0x14142d, density: 0.0012 },
+  8: { color: 0x1e1b3a, density: 0.0020 },
+  9: { color: 0x2b2646, density: 0.0035 },
+};
+
+function updateLightPollutionFog() {
+  if (!scene || !renderer) return;
+  const cfg = BORTLE_FOG_CONFIGS[bortleScale] || BORTLE_FOG_CONFIGS[4];
+  
+  let finalColor = cfg.color;
+  let finalDensity = cfg.density;
+  
+  if (typeof sunAlt !== 'undefined') {
+    if (sunAlt > -8) {
+      const sunFactor = Math.max(0.0, (sunAlt + 8) / 20.0);
+      const dayColor = new THREE.Color(0x1a4575); // 少し暗めの青（昼間の空色）
+      const nightColor = new THREE.Color(cfg.color);
+      const blendedColor = nightColor.clone().lerp(dayColor, Math.min(1.0, sunFactor));
+      finalColor = blendedColor.getHex();
+      finalDensity = cfg.density + sunFactor * 0.0015;
+    }
+  }
+
+  if (scene.fog && scene.fog instanceof THREE.FogExp2) {
+    scene.fog.color.setHex(finalColor);
+    scene.fog.density = finalDensity;
+  }
+  renderer.setClearColor(finalColor, 1.0);
+}
+
+// 流星群アクティビティ管理
+interface MeteorShowerActivity {
+  id: string;
+  activity: number;
+  zhr: number;
+}
+let currentMeteorShowersActivity: Map<string, MeteorShowerActivity> = new Map();
+let lastMeteorFetchDateStr = '';
+let isFetchingMeteors = false;
+
+async function fetchMeteorShowersActivity() {
+  if (isFetchingMeteors) return;
+  const dateStr = currentDate.toISOString().split('T')[0];
+  if (dateStr === lastMeteorFetchDateStr) return;
+  
+  isFetchingMeteors = true;
+  try {
+    const url = `${API_BASE}/api/meteor-showers?time=${encodeURIComponent(currentDate.toISOString())}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('API error');
+    const data = await res.json() as { showers: Array<{ id: string; activity: number; zhr: number }> };
+    
+    currentMeteorShowersActivity.clear();
+    data.showers.forEach(s => {
+      currentMeteorShowersActivity.set(s.id, {
+        id: s.id,
+        activity: s.activity,
+        zhr: s.zhr
+      });
+    });
+    lastMeteorFetchDateStr = dateStr;
+    console.log('Fetched meteor activity for date:', dateStr, data.showers);
+  } catch (err) {
+    console.error('Failed to fetch meteor showers activity:', err);
+  } finally {
+    isFetchingMeteors = false;
+  }
+}
+
+// 天体写真撮影
+const DSO_INFO_MAP: Record<string, { nameJa: string; type: string; file: string }> = {
+  M31: { nameJa: 'アンドロメダ銀河', type: '渦巻銀河 (DSO)', file: 'm31.png' },
+  M42: { nameJa: 'オリオン大星雲', type: '散光星雲 (DSO)', file: 'm42.png' },
+  M45: { nameJa: 'プレアデス星団 (すばる)', type: '散開星団 (DSO)', file: 'm45.png' },
+  M6: { nameJa: 'バタフライ星団', type: '散開星団 (DSO)', file: 'm6.png' },
+  M7: { nameJa: 'プトレマイオス星団', type: '散開星団 (DSO)', file: 'm7.png' },
+  M11: { nameJa: '野鴨星団', type: '散開星団 (DSO)', file: 'm11.png' },
+  M15: { nameJa: 'ペガスス座球状星団', type: '球状星団 (DSO)', file: 'm15.png' },
+  M24: { nameJa: 'いて座スタークラウド', type: '天の川の濃い部分 (DSO)', file: 'm24.png' },
+  M35: { nameJa: 'M35散開星団', type: '散開星団 (DSO)', file: 'm35.png' },
+  M78: { nameJa: 'M78反射星雲', type: '反射星雲 (DSO)', file: 'm78.png' },
+  M83: { nameJa: '南の回転花火銀河', type: '棒渦巻銀河 (DSO)', file: 'm83.png' },
+  M90: { nameJa: 'M90渦巻銀河', type: '渦巻銀河 (DSO)', file: 'm90.png' },
+  IC434: { nameJa: '馬頭星雲', type: '暗黒星雲 (DSO)', file: 'ic434.png' },
+  NGC2237: { nameJa: 'バラ星雲', type: '散光星雲 (DSO)', file: 'ngc2237.png' },
+  NGC869: { nameJa: '二重星団', type: '散開星団 (DSO)', file: 'ngc869.png' },
+  NGC7000: { nameJa: '北アメリカ星雲', type: '散光星雲 (DSO)', file: 'ngc7000.png' },
+  NGC6960: { nameJa: '網状星雲', type: '超新星残骸 (DSO)', file: 'ngc6960.png' },
+  NGC7293: { nameJa: 'らせん星雲', type: '惑星状星雲 (DSO)', file: 'ngc7293.png' },
+  NGC6543: { nameJa: 'キャッツアイ星雲', type: '惑星状星雲 (DSO)', file: 'ngc6543.png' },
+  Moon: { nameJa: '月', type: '衛星', file: 'moon.png' },
+  Sun: { nameJa: '太陽', type: '恒星', file: 'sun.png' },
+  Mercury: { nameJa: '水星', type: '惑星', file: 'mercury.png' },
+  Venus: { nameJa: '金星', type: '惑星', file: 'venus.png' },
+  Mars: { nameJa: '火星', type: '惑星', file: 'mars.png' },
+  Jupiter: { nameJa: '木星', type: '惑星', file: 'jupiter.png' },
+  Saturn: { nameJa: '土星', type: '惑星', file: 'saturn.png' },
+  Uranus: { nameJa: '天王星', type: '惑星', file: 'uranus.png' },
+  Neptune: { nameJa: '海王星', type: '惑星', file: 'neptune.png' },
+  Pluto: { nameJa: '冥王星', type: '準惑星', file: 'pluto.png' },
+};
+
+function updateAstrophotographyPanelVisibility() {
+  const panel = document.getElementById('astrophotography-panel');
+  if (!panel) return;
+  if (observationMode === 'telescope' && activeTrackPlanet && activeTrackPlanet !== 'none') {
+    panel.style.display = 'block';
+  } else {
+    panel.style.display = 'none';
+  }
+}
+
+function initAstrophotography() {
+  const exposureSlider = document.getElementById('astrophoto-exposure') as HTMLInputElement;
+  const exposureVal = document.getElementById('astrophoto-exposure-val');
+  const isoSlider = document.getElementById('astrophoto-iso') as HTMLInputElement;
+  const isoVal = document.getElementById('astrophoto-iso-val');
+  const captureBtn = document.getElementById('btn-astrophoto-capture') as HTMLButtonElement;
+  
+  const overlay = document.getElementById('astrophoto-overlay')!;
+  const progressText = document.getElementById('astrophoto-progress-text')!;
+  const statusText = document.getElementById('astrophoto-status-text')!;
+  const subStatus = document.getElementById('astrophoto-sub-status')!;
+  const previewImg = document.getElementById('astrophoto-preview-img') as HTMLImageElement;
+  const noiseCanvas = document.getElementById('astrophoto-noise-canvas') as HTMLCanvasElement;
+  
+  const cardModal = document.getElementById('astrophoto-card-modal')!;
+  const closeBtn = document.getElementById('btn-close-photo-modal')!;
+  const downloadBtn = document.getElementById('btn-astrophoto-download')!;
+  
+  const cardTargetName = document.getElementById('astrophoto-card-target-name')!;
+  const cardTargetType = document.getElementById('astrophoto-card-target-type')!;
+  const cardDate = document.getElementById('astrophoto-card-date')!;
+  const cardLoc = document.getElementById('astrophoto-card-loc')!;
+  const cardExp = document.getElementById('astrophoto-card-exp')!;
+  const cardIso = document.getElementById('astrophoto-card-iso')!;
+  const finalImage = document.getElementById('astrophoto-final-image') as HTMLImageElement;
+
+  if (exposureSlider && exposureVal) {
+    exposureSlider.addEventListener('input', () => {
+      exposureVal.textContent = exposureSlider.value;
+    });
+  }
+  if (isoSlider && isoVal) {
+    isoSlider.addEventListener('input', () => {
+      isoVal.textContent = isoSlider.value;
+    });
+  }
+
+  let captureInterval: number | null = null;
+  let noiseInterval: number | null = null;
+
+  if (captureBtn) {
+    captureBtn.addEventListener('click', () => {
+      if (!activeTrackPlanet) {
+        showToast('撮影対象の天体が選択されていません', 'error');
+        return;
+      }
+      
+      const targetInfo = DSO_INFO_MAP[activeTrackPlanet];
+      if (!targetInfo) {
+        showToast('この天体は撮影に対応していません。', 'warning');
+        return;
+      }
+
+      const exposureSec = parseInt(exposureSlider.value);
+      const iso = parseInt(isoSlider.value);
+      const durationMs = exposureSec * 1000;
+      const startTime = Date.now();
+      
+      // UIの準備
+      overlay.style.display = 'flex';
+      progressText.textContent = '0%';
+      statusText.textContent = 'シャッター解放中...';
+      subStatus.textContent = `ノイズ除去中 & スタッキング実行中 (0 / ${exposureSec} フレーム)`;
+      previewImg.src = `/assets/${targetInfo.file}`;
+      previewImg.style.filter = 'blur(6px) opacity(0.2)';
+
+      const noiseCtx = noiseCanvas.getContext('2d')!;
+      
+      // ノイズ生成のアニメーションループ
+      if (noiseInterval) clearInterval(noiseInterval);
+      noiseInterval = window.setInterval(() => {
+        const progress = Math.min(1.0, (Date.now() - startTime) / durationMs);
+        const w = noiseCanvas.width;
+        const h = noiseCanvas.height;
+        noiseCtx.clearRect(0, 0, w, h);
+        
+        // 露出が進むにつれてノイズの量を減らしていく
+        const imgData = noiseCtx.createImageData(w, h);
+        const data = imgData.data;
+        const noiseAmount = Math.max(0, 200 * (1.0 - progress * 0.95)); // 進捗95%でほぼノイズは消える
+        const isoFactor = (iso / 1600.0) * 1.5; // ISOが高いほどノイズが多い
+        const maxNoise = noiseAmount * isoFactor;
+
+        for (let i = 0; i < data.length; i += 4) {
+          if (Math.random() < 0.25) { // ドットの密度
+            const val = Math.random() * maxNoise;
+            data[i] = val;     // R
+            data[i+1] = val;   // G
+            data[i+2] = val;   // B
+            data[i+3] = 70 * (1.0 - progress); // 透明度も下がっていく
+          }
+        }
+        noiseCtx.putImageData(imgData, 0, 0);
+      }, 100);
+
+      // 進捗更新ループ
+      if (captureInterval) clearInterval(captureInterval);
+      captureInterval = window.setInterval(() => {
+        const elapsed = Date.now() - startTime;
+        const progress = Math.min(1.0, elapsed / durationMs);
+        const currentFrame = Math.min(exposureSec, Math.floor(progress * exposureSec));
+        
+        progressText.textContent = `${Math.floor(progress * 100)}%`;
+        subStatus.textContent = `ノイズ除去中 & スタッキング実行中 (${currentFrame} / ${exposureSec} フレーム)`;
+        
+        // プレビューのクッキリ度合を更新
+        const blurVal = Math.max(0, 6 * (1.0 - progress));
+        const opacityVal = 0.2 + 0.8 * progress;
+        previewImg.style.filter = `blur(${blurVal}px) opacity(${opacityVal})`;
+
+        if (progress >= 1.0) {
+          if (captureInterval) clearInterval(captureInterval);
+          if (noiseInterval) clearInterval(noiseInterval);
+          captureInterval = null;
+          noiseInterval = null;
+          
+          // 完了演出
+          statusText.textContent = '現像完了！';
+          subStatus.textContent = 'スタッキングに成功しました';
+          
+          setTimeout(() => {
+            overlay.style.display = 'none';
+            
+            // モーダルへ設定
+            cardTargetName.textContent = targetInfo.nameJa;
+            cardTargetType.textContent = targetInfo.type;
+            
+            const now = new Date();
+            cardDate.textContent = now.toLocaleString();
+            cardLoc.textContent = `Lat: ${latitude.toFixed(2)}°, Lon: ${longitude.toFixed(2)}°`;
+            cardExp.textContent = `${exposureSec}s`;
+            cardIso.textContent = `${iso}`;
+            finalImage.src = `/assets/${targetInfo.file}`;
+            
+            cardModal.style.display = 'flex';
+          }, 600);
+        }
+      }, 200);
+    });
+  }
+
+  if (closeBtn) {
+    closeBtn.addEventListener('click', () => {
+      cardModal.style.display = 'none';
+    });
+  }
+
+  // PNGダウンロード処理 (合成 Canvas)
+  if (downloadBtn) {
+    downloadBtn.addEventListener('click', () => {
+      const targetInfo = activeTrackPlanet ? DSO_INFO_MAP[activeTrackPlanet] : null;
+      if (!targetInfo) return;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = 600;
+      canvas.height = 800;
+      const ctx = canvas.getContext('2d')!;
+
+      // 1. 白いカード背景
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, 600, 800);
+      
+      // 2. 枠線 (内側の枠)
+      ctx.strokeStyle = '#dddddd';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(20, 20, 560, 760);
+
+      // 3. 写真（天体写真）をロードして描画
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.src = `/assets/${targetInfo.file}`;
+      img.onload = () => {
+        // 画像は 520x390 (4:3) に収める
+        const imgW = 520;
+        const imgH = 390;
+        const imgX = 40;
+        const imgY = 40;
+        
+        // 写真の背景を黒に
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(imgX, imgY, imgW, imgH);
+        ctx.drawImage(img, imgX, imgY, imgW, imgH);
+
+        // 写真の枠
+        ctx.strokeStyle = '#aaaaaa';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(imgX, imgY, imgW, imgH);
+
+        // 4. テキスト印字 (ポラロイド風フォントレイアウト)
+        ctx.fillStyle = '#111111';
+        ctx.font = "bold 32px 'Outfit', 'Noto Sans JP', sans-serif";
+        ctx.fillText(targetInfo.nameJa, 40, 480);
+
+        ctx.fillStyle = '#555555';
+        ctx.font = "italic 20px 'Outfit', 'Noto Sans JP', sans-serif";
+        ctx.fillText(targetInfo.type, 40, 515);
+
+        // 区切り点線
+        ctx.strokeStyle = '#cccccc';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.setLineDash([4, 4]);
+        ctx.moveTo(40, 545);
+        ctx.lineTo(560, 545);
+        ctx.stroke();
+        ctx.setLineDash([]); // 実線に戻す
+
+        // 撮影詳細テキスト (等幅風フォント)
+        ctx.fillStyle = '#333333';
+        ctx.font = "bold 18px 'Courier New', monospace";
+        
+        const now = new Date();
+        ctx.fillText(`📅 DATE: ${now.toLocaleString()}`, 40, 585);
+        ctx.fillText(`📍 LOC : Lat ${latitude.toFixed(4)} / Lon ${longitude.toFixed(4)}`, 40, 625);
+        ctx.fillText(`⏱ EXP : ${exposureSlider.value} sec`, 40, 665);
+        ctx.fillText(`⚡ ISO : ${isoSlider.value}`, 40, 705);
+        
+        // メインブランド印
+        ctx.fillStyle = '#aaaaaa';
+        ctx.font = "italic bold 14px 'Outfit', sans-serif";
+        ctx.fillText("STELLARIS PROFESSIONAL PLANETARIUM", 40, 755);
+
+        // ダウンロードリンクを生成
+        const link = document.createElement('a');
+        link.download = `stellaris_${targetInfo.file.split('.')[0]}_capture.png`;
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+      };
+    });
+  }
+}
+
 function tick() {
   updateTime();
   updateTweens(performance.now());
@@ -3315,6 +3681,8 @@ async function start() {
   init3D();
   initEvents();
   initEnhancedEvents();
+  initAstrophotography();
+  updateLightPollutionFog();
   await loadFromAPI();
   if (Object.keys(constellationMeta).length > 0) {
     populateConstellationSelect(constellationMeta);
@@ -3326,3 +3694,4 @@ async function start() {
 }
 
 window.addEventListener('DOMContentLoaded', start);
+
