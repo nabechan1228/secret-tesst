@@ -799,11 +799,11 @@ function updateStarSpritesFromBuffer(coords: Float32Array) {
         let size = starVisualScale(star.mag);
         if (star.mag < 3.0) {
           let twinkleAmp = 0.03;
-          let twinkleFreq = 0.0015;
-          if (currentSeeing === 4) { twinkleAmp = 0.08; twinkleFreq = 0.003; }
-          else if (currentSeeing === 3) { twinkleAmp = 0.16; twinkleFreq = 0.005; }
-          else if (currentSeeing === 2) { twinkleAmp = 0.26; twinkleFreq = 0.008; }
-          else if (currentSeeing === 1) { twinkleAmp = 0.40; twinkleFreq = 0.015; }
+          let twinkleFreq = 0.001;
+          if (currentSeeing === 4) { twinkleAmp = 0.08; twinkleFreq = 0.0015; }
+          else if (currentSeeing === 3) { twinkleAmp = 0.16; twinkleFreq = 0.0025; }
+          else if (currentSeeing === 2) { twinkleAmp = 0.26; twinkleFreq = 0.0040; }
+          else if (currentSeeing === 1) { twinkleAmp = 0.35; twinkleFreq = 0.0060; }
           
           const twinkle = (1.0 - twinkleAmp) + twinkleAmp * Math.sin(now * twinkleFreq + star.id * 17.3);
           size *= twinkle;
@@ -1084,6 +1084,45 @@ function drawClouds(w: number, h: number) {
 let lastSystemPlanet = '';
 const systemMoonsMap: Map<string, THREE.Object3D> = new Map();
 
+function createMoonDiscTexture(colorHex: number): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 32;
+  canvas.height = 32;
+  const ctx = canvas.getContext('2d')!;
+  
+  // 完全に透明なピクセルで初期化
+  ctx.fillStyle = 'rgba(0, 0, 0, 0)';
+  ctx.fillRect(0, 0, 32, 32);
+
+  const cx = 16;
+  const cy = 16;
+  const r = 12;
+
+  const grad = ctx.createRadialGradient(cx - 3, cy - 3, 2, cx, cy, r);
+  
+  const r_val = (colorHex >> 16) & 255;
+  const g_val = (colorHex >> 8) & 255;
+  const b_val = colorHex & 255;
+  const baseColor = `rgb(${r_val}, ${g_val}, ${b_val})`;
+  const shadowColor = `rgb(${Math.floor(r_val * 0.2)}, ${Math.floor(g_val * 0.2)}, ${Math.floor(b_val * 0.2)})`;
+
+  grad.addColorStop(0.0, '#ffffff');
+  grad.addColorStop(0.3, baseColor);
+  grad.addColorStop(0.9, shadowColor);
+  grad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
+
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.premultiplyAlpha = false; // アルファ事前乗算をオフにしてブレンドを安定化
+  tex.needsUpdate = true;
+  return tex;
+}
+
 const PLANET_MOONS: Record<string, { obliquity: number; moons: { name: string; radius: number; speed: number; color: number; scale: number; offset: number; }[] }> = {
   Jupiter: {
     obliquity: 3.13,
@@ -1163,10 +1202,9 @@ function updatePlanetSystemOrbits(pid: string, sprite: THREE.Sprite) {
       orbitLine.renderOrder = 9;
       group.add(orbitLine);
 
-      const tex = createStarTexture('#ffffff');
+      const tex = createMoonDiscTexture(m.color);
       const moonMat = new THREE.SpriteMaterial({
         map: tex,
-        color: m.color,
         transparent: true,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
@@ -2477,7 +2515,7 @@ function buildDsoPhotos() {
       const material = new THREE.SpriteMaterial({
         map: texture,
         transparent: true,
-        blending: THREE.NormalBlending,
+        blending: THREE.AdditiveBlending,
         depthWrite: false,
         opacity: 0.0
       });
