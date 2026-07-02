@@ -148,6 +148,13 @@ let auroraKp = 3;
 let auroraOpacity = 0;
 let auroraMesh: THREE.Mesh | null = null;
 let auroraMaterial: THREE.ShaderMaterial | null = null;
+let isForceNightMode = false;
+let showMoonMap = false;
+let currentSeeing = 5;
+let currentCloudCover = 0.0;
+let weatherTemp = 15.0;
+let weatherWind = 5.0;
+let planetSystemGroup: THREE.Group | null = null;
 
 interface MeteorShower {
   name: string;
@@ -637,6 +644,9 @@ function init3D() {
   auroraMesh.visible = false;
   scene.add(auroraMesh);
 
+  planetSystemGroup = new THREE.Group();
+  scene.add(planetSystemGroup);
+
   renderer.xr.enabled = true;
   const vrButton = VRButton.createButton(renderer);
   vrButton.style.bottom = '20px';
@@ -788,7 +798,14 @@ function updateStarSpritesFromBuffer(coords: Float32Array) {
       if (isVisible) {
         let size = starVisualScale(star.mag);
         if (star.mag < 3.0) {
-          const twinkle = 0.90 + 0.10 * Math.sin(now * 0.003 + star.id * 17.3);
+          let twinkleAmp = 0.03;
+          let twinkleFreq = 0.0015;
+          if (currentSeeing === 4) { twinkleAmp = 0.08; twinkleFreq = 0.003; }
+          else if (currentSeeing === 3) { twinkleAmp = 0.16; twinkleFreq = 0.005; }
+          else if (currentSeeing === 2) { twinkleAmp = 0.26; twinkleFreq = 0.008; }
+          else if (currentSeeing === 1) { twinkleAmp = 0.40; twinkleFreq = 0.015; }
+          
+          const twinkle = (1.0 - twinkleAmp) + twinkleAmp * Math.sin(now * twinkleFreq + star.id * 17.3);
           size *= twinkle;
         }
         sprite.scale.set(size, size, 1);
@@ -872,9 +889,10 @@ function drawLightPollution(w: number, h: number, lst: number) {
     const hor = equatorialToHorizontal(sun.ra, sun.dec, lst, latitude);
     sunAlt = hor.alt;
   }
+  const effectiveSunAlt = isForceNightMode ? -20 : sunAlt;
   let sunFade = 1.0;
-  if (sunAlt > -8) {
-    sunFade = Math.max(0.0, 1.0 - (sunAlt + 8) / 8.0);
+  if (effectiveSunAlt > -8) {
+    sunFade = Math.max(0.0, 1.0 - (effectiveSunAlt + 8) / 8.0);
   }
 
   // 日食が進行している時は、食の割合に応じて空の明るさを強制的に下げる
@@ -962,6 +980,240 @@ function drawLightPollution(w: number, h: number, lst: number) {
   ctx2d.restore();
 }
 
+function drawMoonMapOverlay(w: number, h: number) {
+  if (!showMoonMap || observationMode !== 'telescope' || activeTrackPlanet !== 'Moon') return;
+  
+  const moonSprite = dsoPhotoObjects.get('Moon');
+  if (!moonSprite || !moonSprite.visible) return;
+  
+  const pos = new THREE.Vector3();
+  moonSprite.getWorldPosition(pos);
+  
+  const tempPos = pos.clone().project(camera);
+  if (tempPos.z > 1.0) return; 
+  
+  const centerX = (tempPos.x * 0.5 + 0.5) * w;
+  const centerY = (-tempPos.y * 0.5 + 0.5) * h;
+  
+  const dist = camera.position.distanceTo(pos);
+  const fovRad = (camera.fov * Math.PI) / 180;
+  const moon3dRadius = 8.7 * 0.5; 
+  const moonScreenRadius = (moon3dRadius / (dist * Math.tan(fovRad * 0.5))) * (h * 0.5);
+  
+  if (moonScreenRadius < 15) return;
+  
+  const MOON_FEATURES = [
+    { name: 'コペルニクス (Copernicus)', x: -0.25, y: 0.15 },
+    { name: 'ティコ (Tycho)', x: -0.1, y: -0.6 },
+    { name: 'ケプラー (Kepler)', x: -0.48, y: 0.08 },
+    { name: 'プラトン (Plato)', x: -0.1, y: 0.65 },
+    { name: '雨の海 (Mare Imbrium)', x: -0.2, y: 0.38 },
+    { name: '静かの海 (Tranquillitatis)', x: 0.35, y: 0.12 },
+    { name: '晴れの海 (Mare Serenitatis)', x: 0.18, y: 0.32 },
+    { name: '危機の海 (Mare Crisium)', x: 0.62, y: 0.18 },
+    { name: '豊かの海 (Mare Fecunditatis)', x: 0.58, y: -0.12 },
+    { name: '神酒の海 (Mare Nectaris)', x: 0.38, y: -0.28 },
+    { name: '嵐の大洋 (Procellarum)', x: -0.58, y: 0.02 },
+    { name: '雲の海 (Mare Nubium)', x: -0.22, y: -0.38 }
+  ];
+  
+  ctx2d.save();
+  ctx2d.font = "9px 'Outfit', sans-serif";
+  ctx2d.textBaseline = "middle";
+  
+  MOON_FEATURES.forEach(f => {
+    const fx = centerX + f.x * moonScreenRadius;
+    const fy = centerY - f.y * moonScreenRadius; 
+    
+    if (fx < 0 || fx > w || fy < 0 || fy > h) return;
+    
+    ctx2d.strokeStyle = 'rgba(0, 255, 204, 0.45)';
+    ctx2d.lineWidth = 1;
+    ctx2d.beginPath();
+    ctx2d.arc(fx, fy, 2, 0, Math.PI * 2);
+    ctx2d.stroke();
+    
+    const textOffset = f.x >= 0 ? 10 : -10;
+    const textAlign = f.x >= 0 ? 'left' : 'right';
+    ctx2d.textAlign = textAlign;
+    
+    ctx2d.beginPath();
+    ctx2d.moveTo(fx, fy);
+    ctx2d.lineTo(fx + textOffset, fy - 6);
+    ctx2d.lineTo(fx + textOffset + (f.x >= 0 ? 15 : -15), fy - 6);
+    ctx2d.stroke();
+    
+    ctx2d.fillStyle = 'rgba(0,0,0,0.85)';
+    ctx2d.fillText(f.name, fx + textOffset + (f.x >= 0 ? 17 : -17) + 1, fy - 5);
+    ctx2d.fillStyle = 'rgba(0, 255, 204, 0.9)';
+    ctx2d.fillText(f.name, fx + textOffset + (f.x >= 0 ? 17 : -17), fy - 6);
+  });
+  
+  ctx2d.restore();
+}
+
+function drawClouds(w: number, h: number) {
+  if (currentCloudCover <= 5) return;
+
+  ctx2d.save();
+  const baseOpacity = (currentCloudCover / 100) * 0.35;
+  const time = currentDate.getTime() * 0.00002;
+
+  const numClouds = 8;
+  for (let i = 0; i < numClouds; i++) {
+    const seed = i * 1.7;
+    const cx = ((Math.sin(time * 0.5 + seed) * 0.4 + 0.5) * w);
+    const cy = ((Math.cos(time * 0.3 + seed * 1.2) * 0.3 + 0.4) * h);
+    const r = (0.2 + 0.25 * (Math.sin(time * 0.2 + seed) * 0.5 + 0.5)) * Math.min(w, h);
+
+    const grad = ctx2d.createRadialGradient(cx, cy, r * 0.1, cx, cy, r);
+    grad.addColorStop(0.0, `rgba(235, 240, 250, ${baseOpacity})`);
+    grad.addColorStop(0.4, `rgba(220, 225, 235, ${baseOpacity * 0.7})`);
+    grad.addColorStop(0.8, `rgba(200, 210, 225, ${baseOpacity * 0.25})`);
+    grad.addColorStop(1.0, 'rgba(200, 210, 225, 0)');
+
+    ctx2d.fillStyle = grad;
+    ctx2d.beginPath();
+    ctx2d.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx2d.fill();
+  }
+
+  ctx2d.restore();
+}
+
+let lastSystemPlanet = '';
+const systemMoonsMap: Map<string, THREE.Object3D> = new Map();
+
+const PLANET_MOONS: Record<string, { obliquity: number; moons: { name: string; radius: number; speed: number; color: number; scale: number; offset: number; }[] }> = {
+  Jupiter: {
+    obliquity: 3.13,
+    moons: [
+      { name: 'Io', radius: 6.0, speed: 0.006, color: 0xfff59d, scale: 0.40, offset: 0 },
+      { name: 'Europa', radius: 9.0, speed: 0.003, color: 0xe0f7fa, scale: 0.36, offset: 1.5 },
+      { name: 'Ganymede', radius: 13.5, speed: 0.0015, color: 0xffffff, scale: 0.50, offset: 3.0 },
+      { name: 'Callisto', radius: 19.0, speed: 0.0006, color: 0xb0bec5, scale: 0.45, offset: 4.5 }
+    ]
+  },
+  Saturn: {
+    obliquity: 26.73,
+    moons: [
+      { name: 'Titan', radius: 24.0, speed: 0.001, color: 0xffe082, scale: 0.60, offset: 0 },
+      { name: 'Rhea', radius: 15.0, speed: 0.002, color: 0xf5f5f5, scale: 0.40, offset: 2.0 },
+      { name: 'Dione', radius: 11.0, speed: 0.0028, color: 0xe0e0e0, scale: 0.35, offset: 4.0 }
+    ]
+  },
+  Mars: {
+    obliquity: 25.19,
+    moons: [
+      { name: 'Phobos', radius: 4.0, speed: 0.016, color: 0xcfd8dc, scale: 0.25, offset: 0 },
+      { name: 'Deimos', radius: 7.0, speed: 0.006, color: 0xeceff1, scale: 0.22, offset: 3.1 }
+    ]
+  }
+};
+
+function updatePlanetSystemOrbits(pid: string, sprite: THREE.Sprite) {
+  if (!planetSystemGroup) return;
+
+  const fov = camera.fov;
+  const isZoomed = fov < 5.5; 
+  const isTelescope = observationMode === 'telescope';
+  const showSystem = isZoomed && isTelescope;
+  
+  if (!showSystem) {
+    planetSystemGroup.visible = false;
+    return;
+  }
+
+  const sysConfig = PLANET_MOONS[pid];
+  if (!sysConfig) {
+    planetSystemGroup.visible = false;
+    return;
+  }
+
+  planetSystemGroup.visible = true;
+  planetSystemGroup.position.copy(sprite.position);
+  
+  planetSystemGroup.rotation.set(0, 0, 0);
+  planetSystemGroup.rotateX(THREE.MathUtils.degToRad(sysConfig.obliquity + 90)); 
+
+  if (lastSystemPlanet !== pid) {
+    const group = planetSystemGroup;
+    while (group.children.length > 0) {
+      const child = group.children[0];
+      group.remove(child);
+    }
+    systemMoonsMap.clear();
+
+    sysConfig.moons.forEach(m => {
+      const points: THREE.Vector3[] = [];
+      const segments = 64;
+      for (let i = 0; i <= segments; i++) {
+        const theta = (i / segments) * Math.PI * 2;
+        points.push(new THREE.Vector3(Math.cos(theta) * m.radius, Math.sin(theta) * m.radius, 0));
+      }
+      const orbitGeo = new THREE.BufferGeometry().setFromPoints(points);
+      const orbitMat = new THREE.LineBasicMaterial({
+        color: 0x00e5ff,
+        transparent: true,
+        opacity: 0.35,
+        depthWrite: false,
+        depthTest: false
+      });
+      const orbitLine = new THREE.LineLoop(orbitGeo, orbitMat);
+      orbitLine.renderOrder = 9;
+      group.add(orbitLine);
+
+      const tex = createStarTexture('#ffffff');
+      const moonMat = new THREE.SpriteMaterial({
+        map: tex,
+        color: m.color,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        depthTest: false
+      });
+      const moonSprite = new THREE.Sprite(moonMat);
+      const visualScale = m.scale * 3.5;
+      moonSprite.scale.set(visualScale, visualScale, 1);
+      moonSprite.renderOrder = 10;
+      group.add(moonSprite);
+      systemMoonsMap.set(m.name, moonSprite);
+    });
+
+    lastSystemPlanet = pid;
+  }
+
+  const now = (currentDate.getTime() / 1000) * 0.05;
+  sysConfig.moons.forEach(m => {
+    const moonMesh = systemMoonsMap.get(m.name);
+    if (moonMesh) {
+      const theta = now * m.speed * 100.0 + m.offset;
+      moonMesh.position.set(Math.cos(theta) * m.radius, Math.sin(theta) * m.radius, 0);
+
+      const worldPos = new THREE.Vector3();
+      moonMesh.getWorldPosition(worldPos);
+
+      const tempPos = worldPos.clone().project(camera);
+      if (tempPos.z <= 1.0) {
+        const w = overlayCanvas.width;
+        const h = overlayCanvas.height;
+        const scrX = (tempPos.x * 0.5 + 0.5) * w;
+        const scrY = (-tempPos.y * 0.5 + 0.5) * h;
+
+        if (scrX >= 0 && scrX <= w && scrY >= 0 && scrY <= h) {
+          ctx2d.save();
+          ctx2d.font = "8px 'Outfit', sans-serif";
+          ctx2d.fillStyle = 'rgba(0,0,0,0.8)';
+          ctx2d.fillText(m.name, scrX + 6, scrY + 1);
+          ctx2d.fillStyle = '#e0f7fa';
+          ctx2d.fillText(m.name, scrX + 5, scrY);
+          ctx2d.restore();
+        }
+      }
+    }
+  });
+}
+
 
 function gradEstimate(h: number): number {
   if (!camera) return h * 0.25;
@@ -1005,7 +1257,7 @@ function updatePositionsAndRender() {
 
   // --- オーロラの出現・揺らめき更新 ---
   const isPolar = Math.abs(latitude) >= 60;
-  const isNight = typeof sunAlt === 'undefined' || sunAlt < -12;
+  const isNight = isForceNightMode || typeof sunAlt === 'undefined' || sunAlt < -12;
   const isAuroraActive = showAurora && isPolar && isNight;
 
   if (isAuroraActive) {
@@ -1210,6 +1462,8 @@ function updatePositionsAndRender() {
   ctx2d.clearRect(0, 0, w, h);
 
   drawLightPollution(w, h, lst);
+  drawClouds(w, h);
+  drawMoonMapOverlay(w, h);
 
   if (showStarNames) {
     ctx2d.font = "11px 'Outfit', sans-serif";
@@ -2317,6 +2571,7 @@ function updateDsoPhotos(lst: number) {
 
 
   const planetsToUpdate = ['Jupiter', 'Saturn', 'Venus', 'Mars', 'Mercury', 'Uranus', 'Neptune', 'Pluto'];
+  let activePlanetSystemUpdated = false;
   planetsToUpdate.forEach(pid => {
     const sprite = dsoPhotoObjects.get(pid);
     if (sprite) {
@@ -2328,11 +2583,21 @@ function updateDsoPhotos(lst: number) {
         sprite.position.copy(pos3d);
         sprite.visible = hor.alt >= 0 && maxOpacity > 0.05;
         (sprite.material as THREE.SpriteMaterial).opacity = maxOpacity;
+
+        // 惑星系（軌道と衛星）の更新
+        if (pid === 'Jupiter' || pid === 'Saturn' || pid === 'Mars') {
+          updatePlanetSystemOrbits(pid, sprite);
+          activePlanetSystemUpdated = true;
+        }
       } else {
         sprite.visible = false;
       }
     }
   });
+
+  if (!activePlanetSystemUpdated && planetSystemGroup) {
+    planetSystemGroup.visible = false;
+  }
 
   const dsoConfigs = [
     { id: 'M31', ...DSO_FIXED_COORDS['M31'] },
@@ -2545,11 +2810,14 @@ function initEvents() {
       latitude = p[0]; longitude = p[1];
       latInput.value = String(latitude);
       lngInput.value = String(longitude);
+      fetchWeather();
     }
   });
 
   latInput.addEventListener('input', () => { latitude = parseFloat(latInput.value) || 0; });
   lngInput.addEventListener('input', () => { longitude = parseFloat(lngInput.value) || 0; });
+  latInput.addEventListener('change', () => { fetchWeather(); });
+  lngInput.addEventListener('change', () => { fetchWeather(); });
 
   const timeFlowCheckbox = document.getElementById('toggle-time-flow') as HTMLInputElement;
   const speedSlider = document.getElementById('time-speed') as HTMLInputElement;
@@ -3353,6 +3621,7 @@ function initEnhancedEvents() {
           (document.getElementById('input-lng') as HTMLInputElement).value = longitude.toFixed(2);
           showToast('現在地を更新しました', 'info');
           loadFromAPI();
+          fetchWeather();
         },
         () => showToast('現在地の取得に失敗しました', 'error')
       );
@@ -3445,8 +3714,9 @@ function updateLightPollutionFog() {
   let finalDensity = cfg.density;
   
   if (typeof sunAlt !== 'undefined') {
-    if (sunAlt > -8) {
-      const sunFactor = Math.max(0.0, (sunAlt + 8) / 20.0);
+    const altVal = isForceNightMode ? -20 : sunAlt;
+    if (altVal > -8) {
+      const sunFactor = Math.max(0.0, (altVal + 8) / 20.0);
       const dayColor = new THREE.Color(0x1a4575); // 少し暗めの青（昼間の空色）
       const nightColor = new THREE.Color(cfg.color);
       const blendedColor = nightColor.clone().lerp(dayColor, Math.min(1.0, sunFactor));
@@ -3599,7 +3869,7 @@ function initAstrophotography() {
 
       const exposureSec = parseInt(exposureSlider.value);
       const iso = parseInt(isoSlider.value);
-      const durationMs = exposureSec * 1000;
+      const durationMs = exposureSec * 1000 * (1.0 + (5 - currentSeeing) * 0.15);
       const startTime = Date.now();
       
       // UIの準備
@@ -3623,17 +3893,19 @@ function initAstrophotography() {
         // 露出が進むにつれてノイズの量を減らしていく
         const imgData = noiseCtx.createImageData(w, h);
         const data = imgData.data;
-        const noiseAmount = Math.max(0, 200 * (1.0 - progress * 0.95)); // 進捗95%でほぼノイズは消える
-        const isoFactor = (iso / 1600.0) * 1.5; // ISOが高いほどノイズが多い
+        const noiseAmountBase = Math.max(0, 200 * (1.0 - progress * 0.95));
+        const seeingNoiseFactor = Math.max(0.0, (5 - currentSeeing) * 12.0); 
+        const noiseAmount = noiseAmountBase + (1.0 - progress) * seeingNoiseFactor;
+        const isoFactor = (iso / 1600.0) * 1.5; 
         const maxNoise = noiseAmount * isoFactor;
 
         for (let i = 0; i < data.length; i += 4) {
-          if (Math.random() < 0.25) { // ドットの密度
+          if (Math.random() < 0.25) { 
             const val = Math.random() * maxNoise;
-            data[i] = val;     // R
-            data[i+1] = val;   // G
-            data[i+2] = val;   // B
-            data[i+3] = 70 * (1.0 - progress); // 透明度も下がっていく
+            data[i] = val;     
+            data[i+1] = val;   
+            data[i+2] = val;   
+            data[i+3] = 70 * (1.0 - progress) + (seeingNoiseFactor * 0.2); 
           }
         }
         noiseCtx.putImageData(imgData, 0, 0);
@@ -3680,6 +3952,8 @@ function initAstrophotography() {
             cardExp.textContent = `${exposureSec}s`;
             cardIso.textContent = `${iso}`;
             finalImage.src = `/assets/${targetInfo.file}`;
+            const blurAmount = Math.max(0, (5 - currentSeeing) * 0.6);
+            finalImage.style.filter = blurAmount > 0 ? `blur(${blurAmount}px)` : 'none';
             
             cardModal.style.display = 'flex';
           }, 600);
@@ -3728,7 +4002,13 @@ function initAstrophotography() {
         // 写真の背景を黒に
         ctx.fillStyle = '#000000';
         ctx.fillRect(imgX, imgY, imgW, imgH);
+        
+        const blurAmount = Math.max(0, (5 - currentSeeing) * 0.6);
+        if (blurAmount > 0) {
+          ctx.filter = `blur(${blurAmount}px)`;
+        }
         ctx.drawImage(img, imgX, imgY, imgW, imgH);
+        ctx.filter = 'none';
 
         // 写真の枠
         ctx.strokeStyle = '#aaaaaa';
@@ -3879,7 +4159,7 @@ function checkAchievements(logData: any) {
   // 5. Aurora Expedition (極地かつオーロラ有効状態で撮影/観測)
   if (!currentBadges.has('aurora-expedition')) {
     const isPolar = Math.abs(latitude) >= 60;
-    const isNight = typeof sunAlt === 'undefined' || sunAlt < -12;
+    const isNight = isForceNightMode || typeof sunAlt === 'undefined' || sunAlt < -12;
     if (showAurora && isPolar && isNight) {
       newBadges.push('aurora-expedition');
       showToast('🏆 実績達成: Aurora Expedition (極地でオーロラを観測した！)', 'info');
@@ -4139,7 +4419,7 @@ function initEnhancedFeaturesV2() {
       showAurora = toggleAurora.checked;
       if (showAurora) {
         const isPolar = Math.abs(latitude) >= 60;
-        const isNight = typeof sunAlt === 'undefined' || sunAlt < -12;
+        const isNight = isForceNightMode || typeof sunAlt === 'undefined' || sunAlt < -12;
         if (!isPolar) {
           showToast('緯度が低いためオーロラは出現しません (緯度60度以上に設定してください)', 'info');
         } else if (!isNight) {
@@ -4183,6 +4463,70 @@ function initEnhancedFeaturesV2() {
       hideStarPhysicalInfo();
     });
   }
+
+  // 強制夜空トグル
+  const toggleForceNight = document.getElementById('toggle-force-night') as HTMLInputElement;
+  if (toggleForceNight) {
+    toggleForceNight.addEventListener('change', () => {
+      isForceNightMode = toggleForceNight.checked;
+      updateLightPollutionFog();
+      showToast(isForceNightMode ? '強制夜空モードを有効にしました' : '強制夜空モードを解除しました', 'info');
+    });
+  }
+
+  // 月面地図トグル
+  const toggleMoonMap = document.getElementById('toggle-moon-map') as HTMLInputElement;
+  if (toggleMoonMap) {
+    toggleMoonMap.addEventListener('change', () => {
+      showMoonMap = toggleMoonMap.checked;
+      showToast(showMoonMap ? '月面地図表示を有効にしました (望遠鏡で月を追尾時に表示)' : '月面地図表示を無効にしました', 'info');
+    });
+  }
+}
+
+async function fetchWeather() {
+  const weatherDescEl = document.getElementById('weather-desc');
+  const seeingStarsEl = document.getElementById('seeing-stars');
+  
+  if (weatherDescEl) weatherDescEl.textContent = '取得中...';
+  
+  try {
+    const res = await fetch(`${API_BASE}/api/weather?lat=${latitude}&lng=${longitude}`);
+    if (!res.ok) throw new Error('API response not ok');
+    const data = await res.json();
+    
+    weatherTemp = data.temperature;
+    weatherWind = data.wind_speed;
+    currentCloudCover = data.cloud_cover;
+    
+    // シーイング評価 (1〜5)
+    let score = 5;
+    if (currentCloudCover > 85) score = 1;
+    else if (currentCloudCover > 60) score = Math.min(score, 2);
+    else if (currentCloudCover > 30) score = Math.min(score, 3);
+    else if (currentCloudCover > 10) score = Math.min(score, 4);
+    
+    if (weatherWind > 35) score = Math.min(score, 1);
+    else if (weatherWind > 22) score = Math.min(score, 2);
+    else if (weatherWind > 12) score = Math.min(score, 3);
+    else if (weatherWind > 6) score = Math.min(score, 4);
+    
+    if (data.humidity > 90) score = Math.max(1, score - 1);
+    
+    currentSeeing = Math.max(1, score);
+    
+    if (weatherDescEl) {
+      weatherDescEl.textContent = `${weatherTemp.toFixed(1)}°C / 雲:${Math.round(currentCloudCover)}% / 風:${weatherWind.toFixed(1)}k`;
+    }
+    if (seeingStarsEl) {
+      seeingStarsEl.textContent = '★'.repeat(currentSeeing) + '☆'.repeat(5 - currentSeeing);
+    }
+  } catch (e) {
+    console.error('天気情報の取得に失敗しました:', e);
+    currentSeeing = 5;
+    if (weatherDescEl) weatherDescEl.textContent = '取得失敗 (快晴)';
+    if (seeingStarsEl) seeingStarsEl.textContent = '★★★★★';
+  }
 }
 
 function tick() {
@@ -4212,6 +4556,7 @@ async function start() {
   initAstrophotography();
   updateLightPollutionFog();
   initEnhancedFeaturesV2();
+  fetchWeather();
   await loadFromAPI();
   if (Object.keys(constellationMeta).length > 0) {
     populateConstellationSelect(constellationMeta);
