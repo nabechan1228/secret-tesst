@@ -734,6 +734,26 @@
                 <option value="conjunction-2020">2020年 木星・土星超大接近</option>
               </select>
             </div>
+
+            <hr class="divider">
+
+            <div class="control-row">
+              <label for="toggle-aurora">オーロラ (Aurora)</label>
+              <label class="switch">
+                <input type="checkbox" id="toggle-aurora">
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="control-row">
+              <label for="aurora-kp">活動強度: <span id="aurora-kp-val" style="color:var(--accent);font-weight:bold;">3</span> Kp</label>
+            </div>
+            <input type="range" id="aurora-kp" min="0" max="9" value="3" step="1">
+
+            <hr class="divider">
+
+            <button id="btn-open-logbook" class="btn btn-accent" style="width:100%;padding:8px;border-radius:8px;font-weight:bold;margin-top:6px;background:linear-gradient(135deg, #00acc1 0%, #0077c2 100%);">
+              📖 観測ログ & 実績 (Logbook)
+            </button>
           </div>
         </div>
 
@@ -824,6 +844,89 @@
           <div id="const-name">-</div>
           <div id="const-season">-</div>
           <div id="const-desc">-</div>
+        </div>
+
+        <!-- 恒星情報フローティングパネル -->
+        <div id="star-info-panel" style="display:none; position:absolute; top:80px; right:20px; width:280px; z-index:100; pointer-events:auto; backdrop-filter:blur(8px);">
+          <div class="panel" style="position:relative; box-shadow:0 15px 30px rgba(0,0,0,0.5);">
+            <button id="close-star-panel" style="position:absolute; top:12px; right:12px; background:none; border:none; color:var(--text-secondary); font-size:1rem; cursor:pointer;">✕</button>
+            <div class="panel-title" id="star-detail-name">-</div>
+            <div class="control-group" style="font-size:0.8rem; line-height:1.4;">
+              <div style="display:grid; grid-template-columns:1fr 1.2fr; gap:4px; font-family:monospace; border-bottom:1px dashed var(--panel-border); padding-bottom:8px; margin-bottom:8px;">
+                <div>学名/HIP:</div><div id="star-detail-hip" style="color:var(--text-primary);">-</div>
+                <div>視等級:</div><div id="star-detail-mag" style="color:var(--accent);font-weight:bold;">-</div>
+                <div>B-V 指数:</div><div id="star-detail-bv" style="color:var(--text-primary);">-</div>
+                <div>スペクトル:</div><div id="star-detail-spectral" style="color:var(--accent);font-weight:bold;">-</div>
+                <div>表面温度:</div><div id="star-detail-temp" style="color:var(--text-primary);">-</div>
+              </div>
+              <div style="font-weight:bold; color:var(--text-secondary); margin-bottom:4px; font-size:0.75rem;">スペクトル・黒体放射曲線</div>
+              <div style="position:relative; width:100%; height:160px; background:#020208; border-radius:6px; overflow:hidden; border:1px solid var(--panel-border);">
+                <canvas id="star-spectrum-canvas" width="246" height="158" style="width:100%; height:100%;"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 観測ログ＆実績 (Logbook) モーダル -->
+        <div id="logbook-modal" style="display:none; position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:220; align-items:center; justify-content:center; backdrop-filter:blur(8px);">
+          <div class="panel" style="width:720px; max-height:85%; display:flex; flex-direction:column; gap:16px; align-items:stretch; animation:fadeInUp 0.3s ease-out; position:relative; box-shadow:0 25px 50px rgba(0,0,0,0.8); overflow:hidden;">
+            <button id="btn-close-logbook" style="position:absolute; top:12px; right:12px; background:none; border:none; color:var(--text-secondary); font-size:1.2rem; cursor:pointer; z-index:10;">✕</button>
+            <div class="panel-title" style="margin-bottom:4px; font-size:1.4rem;">📖 Observation Logbook & Achievements</div>
+            
+            <div style="display:grid; grid-template-columns:1.8fr 1fr; gap:20px; overflow:hidden; height:450px;">
+              <!-- 撮影写真ログ -->
+              <div style="display:flex; flex-direction:column; gap:8px; overflow:hidden;">
+                <div style="font-size:0.9rem; font-weight:bold; color:var(--accent);">撮影ギャラリー</div>
+                <div id="logbook-gallery" style="display:grid; grid-template-columns:1fr 1fr; gap:12px; overflow-y:auto; padding-right:6px; flex:1; align-content:start;">
+                  <!-- 動的にポラロイドのサムネイルを挿入 -->
+                  <div style="color:var(--text-secondary); font-size:0.8rem; text-align:center; grid-column:span 2; margin-top:40px;">まだ撮影された写真はありません。</div>
+                </div>
+              </div>
+              
+              <!-- 獲得バッジ -->
+              <div style="display:flex; flex-direction:column; gap:8px; border-left:1px solid var(--panel-border); padding-left:16px; overflow:hidden;">
+                <div style="font-size:0.9rem; font-weight:bold; color:var(--accent);">獲得実績バッジ</div>
+                <div id="logbook-badges" style="display:flex; flex-direction:column; gap:10px; overflow-y:auto; flex:1;">
+                  <!-- 各バッジを定義 -->
+                  <div class="badge-item" id="badge-first-light" style="opacity:0.3; display:flex; align-items:center; gap:10px; padding:6px; border-radius:6px; background:rgba(255,255,255,0.03); transition: opacity 0.5s;">
+                    <div style="font-size:1.6rem;">🔭</div>
+                    <div style="text-align:left;">
+                      <div style="font-weight:bold; font-size:0.8rem; color:var(--text-primary);">First Light</div>
+                      <div style="font-size:0.65rem; color:var(--text-secondary);">最初の天体写真を現像する</div>
+                    </div>
+                  </div>
+                  <div class="badge-item" id="badge-messier-hunter" style="opacity:0.3; display:flex; align-items:center; gap:10px; padding:6px; border-radius:6px; background:rgba(255,255,255,0.03); transition: opacity 0.5s;">
+                    <div style="font-size:1.6rem;">🌌</div>
+                    <div style="text-align:left;">
+                      <div style="font-weight:bold; font-size:0.8rem; color:var(--text-primary);">Messier Hunter</div>
+                      <div style="font-size:0.65rem; color:var(--text-secondary);">メシエ天体を3つ以上撮影する</div>
+                    </div>
+                  </div>
+                  <div class="badge-item" id="badge-eclipse-chaser" style="opacity:0.3; display:flex; align-items:center; gap:10px; padding:6px; border-radius:6px; background:rgba(255,255,255,0.03); transition: opacity 0.5s;">
+                    <div style="font-size:1.6rem;">🌑</div>
+                    <div style="text-align:left;">
+                      <div style="font-weight:bold; font-size:0.8rem; color:var(--text-primary);">Eclipse Chaser</div>
+                      <div style="font-size:0.65rem; color:var(--text-secondary);">日食または月食の最大期を追尾</div>
+                    </div>
+                  </div>
+                  <div class="badge-item" id="badge-city-astrophoto" style="opacity:0.3; display:flex; align-items:center; gap:10px; padding:6px; border-radius:6px; background:rgba(255,255,255,0.03); transition: opacity 0.5s;">
+                    <div style="font-size:1.6rem;">🏢</div>
+                    <div style="text-align:left;">
+                      <div style="font-weight:bold; font-size:0.8rem; color:var(--text-primary);">City Astrophotographer</div>
+                      <div style="font-size:0.65rem; color:var(--text-secondary);">Bortle 8-9で15秒以上露出撮影</div>
+                    </div>
+                  </div>
+                  <div class="badge-item" id="badge-aurora-expedition" style="opacity:0.3; display:flex; align-items:center; gap:10px; padding:6px; border-radius:6px; background:rgba(255,255,255,0.03); transition: opacity 0.5s;">
+                    <div style="font-size:1.6rem;">💚</div>
+                    <div style="text-align:left;">
+                      <div style="font-weight:bold; font-size:0.8rem; color:var(--text-primary);">Aurora Expedition</div>
+                      <div style="font-size:0.65rem; color:var(--text-secondary);">オーロラが出ている地域で撮影/観測</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- トースト -->
