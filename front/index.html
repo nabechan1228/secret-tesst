@@ -452,6 +452,16 @@
         #sidebar { width: 260px; min-width: 260px; }
         #constellation-info-panel { width: 260px; }
       }
+
+      /* ============ 天体写真撮影 ============ */
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+      @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
     </style>
   </head>
   <body>
@@ -631,6 +641,10 @@
                   <option value="Saturn">土星 (Saturn)</option>
                   <option value="Venus">金星 (Venus)</option>
                   <option value="Mars">火星 (Mars)</option>
+                  <option value="Mercury">水星 (Mercury)</option>
+                  <option value="Uranus">天王星 (Uranus)</option>
+                  <option value="Neptune">海王星 (Neptune)</option>
+                  <option value="Pluto">冥王星 (Pluto)</option>
                 </optgroup>
                 <optgroup label="深宇宙天体 (DSO)">
                   <option value="M31">アンドロメダ銀河 (M31)</option>
@@ -658,6 +672,25 @@
             <div id="obs-mode-details" style="display:none;margin-top:10px;padding:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(80,160,255,0.12);border-radius:10px;font-size:0.75rem;line-height:1.6;color:var(--text-secondary);">
               <span id="obs-mode-desc"></span>
             </div>
+          </div>
+        </div>
+        <!-- 天体写真撮影 (Astrophotography) -->
+        <div class="panel" id="astrophotography-panel" style="display:none;">
+          <div class="panel-title">Astrophotography</div>
+          <div class="control-group">
+            <div class="control-row">
+              <label for="astrophoto-exposure">露光時間: <span id="astrophoto-exposure-val" style="color:var(--accent);font-weight:bold;">10</span>秒</label>
+            </div>
+            <input type="range" id="astrophoto-exposure" min="2" max="60" value="10" step="1">
+
+            <div class="control-row">
+              <label for="astrophoto-iso">ISO感度: <span id="astrophoto-iso-val" style="color:var(--accent);font-weight:bold;">1600</span></label>
+            </div>
+            <input type="range" id="astrophoto-iso" min="100" max="12800" value="1600" step="100">
+
+            <button id="btn-astrophoto-capture" class="btn btn-accent" style="width:100%;padding:8px;border-radius:8px;font-weight:bold;margin-top:6px;">
+              📸 撮影を開始 (露出＆スタック)
+            </button>
           </div>
         </div>
 
@@ -701,6 +734,37 @@
                 <option value="conjunction-2020">2020年 木星・土星超大接近</option>
               </select>
             </div>
+
+            <hr class="divider">
+
+            <div class="control-row">
+              <label for="toggle-aurora">オーロラ (Aurora)</label>
+              <label class="switch">
+                <input type="checkbox" id="toggle-aurora">
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="control-row">
+              <label for="aurora-kp">活動強度: <span id="aurora-kp-val" style="color:var(--accent);font-weight:bold;">3</span> Kp</label>
+            </div>
+            <input type="range" id="aurora-kp" min="0" max="9" value="3" step="1">
+
+            <hr class="divider">
+
+            <div class="control-row" style="font-size:0.8rem; line-height: 1.4;">
+              <span>天気/大気:</span>
+              <span id="weather-desc" style="color:var(--accent);font-weight:bold;text-align:right;">取得中...</span>
+            </div>
+            <div class="control-row" style="font-size:0.8rem; line-height: 1.4;">
+              <span>シーイング:</span>
+              <span id="seeing-stars" style="color:#ffca28;font-weight:bold;text-align:right;">★★★★★</span>
+            </div>
+
+            <hr class="divider">
+
+            <button id="btn-open-logbook" class="btn btn-accent" style="width:100%;padding:8px;border-radius:8px;font-weight:bold;margin-top:6px;background:linear-gradient(135deg, #00acc1 0%, #0077c2 100%);">
+              📖 観測ログ & 実績 (Logbook)
+            </button>
           </div>
         </div>
 
@@ -734,6 +798,20 @@
               <label for="toggle-dso">星雲・DSO</label>
               <label class="switch">
                 <input type="checkbox" id="toggle-dso" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="control-row">
+              <label for="toggle-force-night">強制夜空</label>
+              <label class="switch">
+                <input type="checkbox" id="toggle-force-night">
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="control-row">
+              <label for="toggle-moon-map">月面地図</label>
+              <label class="switch">
+                <input type="checkbox" id="toggle-moon-map">
                 <span class="slider"></span>
               </label>
             </div>
@@ -793,8 +871,134 @@
           <div id="const-desc">-</div>
         </div>
 
+        <!-- 恒星情報フローティングパネル -->
+        <div id="star-info-panel" style="display:none; position:absolute; top:80px; right:20px; width:280px; z-index:100; pointer-events:auto; backdrop-filter:blur(8px);">
+          <div class="panel" style="position:relative; box-shadow:0 15px 30px rgba(0,0,0,0.5);">
+            <button id="close-star-panel" style="position:absolute; top:12px; right:12px; background:none; border:none; color:var(--text-secondary); font-size:1rem; cursor:pointer;">✕</button>
+            <div class="panel-title" id="star-detail-name">-</div>
+            <div class="control-group" style="font-size:0.8rem; line-height:1.4;">
+              <div style="display:grid; grid-template-columns:1fr 1.2fr; gap:4px; font-family:monospace; border-bottom:1px dashed var(--panel-border); padding-bottom:8px; margin-bottom:8px;">
+                <div>学名/HIP:</div><div id="star-detail-hip" style="color:var(--text-primary);">-</div>
+                <div>視等級:</div><div id="star-detail-mag" style="color:var(--accent);font-weight:bold;">-</div>
+                <div>B-V 指数:</div><div id="star-detail-bv" style="color:var(--text-primary);">-</div>
+                <div>スペクトル:</div><div id="star-detail-spectral" style="color:var(--accent);font-weight:bold;">-</div>
+                <div>表面温度:</div><div id="star-detail-temp" style="color:var(--text-primary);">-</div>
+              </div>
+              <div style="font-weight:bold; color:var(--text-secondary); margin-bottom:4px; font-size:0.75rem;">スペクトル・黒体放射曲線</div>
+              <div style="position:relative; width:100%; height:160px; background:#020208; border-radius:6px; overflow:hidden; border:1px solid var(--panel-border);">
+                <canvas id="star-spectrum-canvas" width="246" height="158" style="width:100%; height:100%;"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 観測ログ＆実績 (Logbook) モーダル -->
+        <div id="logbook-modal" style="display:none; position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:220; align-items:center; justify-content:center; backdrop-filter:blur(8px);">
+          <div class="panel" style="width:720px; max-height:85%; display:flex; flex-direction:column; gap:16px; align-items:stretch; animation:fadeInUp 0.3s ease-out; position:relative; box-shadow:0 25px 50px rgba(0,0,0,0.8); overflow:hidden;">
+            <button id="btn-close-logbook" style="position:absolute; top:12px; right:12px; background:none; border:none; color:var(--text-secondary); font-size:1.2rem; cursor:pointer; z-index:10;">✕</button>
+            <div class="panel-title" style="margin-bottom:4px; font-size:1.4rem;">📖 Observation Logbook & Achievements</div>
+            
+            <div style="display:grid; grid-template-columns:1.8fr 1fr; gap:20px; overflow:hidden; height:450px;">
+              <!-- 撮影写真ログ -->
+              <div style="display:flex; flex-direction:column; gap:8px; overflow:hidden;">
+                <div style="font-size:0.9rem; font-weight:bold; color:var(--accent);">撮影ギャラリー</div>
+                <div id="logbook-gallery" style="display:grid; grid-template-columns:1fr 1fr; gap:12px; overflow-y:auto; padding-right:6px; flex:1; align-content:start;">
+                  <!-- 動的にポラロイドのサムネイルを挿入 -->
+                  <div style="color:var(--text-secondary); font-size:0.8rem; text-align:center; grid-column:span 2; margin-top:40px;">まだ撮影された写真はありません。</div>
+                </div>
+              </div>
+              
+              <!-- 獲得バッジ -->
+              <div style="display:flex; flex-direction:column; gap:8px; border-left:1px solid var(--panel-border); padding-left:16px; overflow:hidden;">
+                <div style="font-size:0.9rem; font-weight:bold; color:var(--accent);">獲得実績バッジ</div>
+                <div id="logbook-badges" style="display:flex; flex-direction:column; gap:10px; overflow-y:auto; flex:1;">
+                  <!-- 各バッジを定義 -->
+                  <div class="badge-item" id="badge-first-light" style="opacity:0.3; display:flex; align-items:center; gap:10px; padding:6px; border-radius:6px; background:rgba(255,255,255,0.03); transition: opacity 0.5s;">
+                    <div style="font-size:1.6rem;">🔭</div>
+                    <div style="text-align:left;">
+                      <div style="font-weight:bold; font-size:0.8rem; color:var(--text-primary);">First Light</div>
+                      <div style="font-size:0.65rem; color:var(--text-secondary);">最初の天体写真を現像する</div>
+                    </div>
+                  </div>
+                  <div class="badge-item" id="badge-messier-hunter" style="opacity:0.3; display:flex; align-items:center; gap:10px; padding:6px; border-radius:6px; background:rgba(255,255,255,0.03); transition: opacity 0.5s;">
+                    <div style="font-size:1.6rem;">🌌</div>
+                    <div style="text-align:left;">
+                      <div style="font-weight:bold; font-size:0.8rem; color:var(--text-primary);">Messier Hunter</div>
+                      <div style="font-size:0.65rem; color:var(--text-secondary);">メシエ天体を3つ以上撮影する</div>
+                    </div>
+                  </div>
+                  <div class="badge-item" id="badge-eclipse-chaser" style="opacity:0.3; display:flex; align-items:center; gap:10px; padding:6px; border-radius:6px; background:rgba(255,255,255,0.03); transition: opacity 0.5s;">
+                    <div style="font-size:1.6rem;">🌑</div>
+                    <div style="text-align:left;">
+                      <div style="font-weight:bold; font-size:0.8rem; color:var(--text-primary);">Eclipse Chaser</div>
+                      <div style="font-size:0.65rem; color:var(--text-secondary);">日食または月食の最大期を追尾</div>
+                    </div>
+                  </div>
+                  <div class="badge-item" id="badge-city-astrophoto" style="opacity:0.3; display:flex; align-items:center; gap:10px; padding:6px; border-radius:6px; background:rgba(255,255,255,0.03); transition: opacity 0.5s;">
+                    <div style="font-size:1.6rem;">🏢</div>
+                    <div style="text-align:left;">
+                      <div style="font-weight:bold; font-size:0.8rem; color:var(--text-primary);">City Astrophotographer</div>
+                      <div style="font-size:0.65rem; color:var(--text-secondary);">Bortle 8-9で15秒以上露出撮影</div>
+                    </div>
+                  </div>
+                  <div class="badge-item" id="badge-aurora-expedition" style="opacity:0.3; display:flex; align-items:center; gap:10px; padding:6px; border-radius:6px; background:rgba(255,255,255,0.03); transition: opacity 0.5s;">
+                    <div style="font-size:1.6rem;">💚</div>
+                    <div style="text-align:left;">
+                      <div style="font-weight:bold; font-size:0.8rem; color:var(--text-primary);">Aurora Expedition</div>
+                      <div style="font-size:0.65rem; color:var(--text-secondary);">オーロラが出ている地域で撮影/観測</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- トースト -->
         <div id="toast"></div>
+
+        <!-- 撮影中オーバーレイ -->
+        <div id="astrophoto-overlay" style="display:none; position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:200; align-items:center; justify-content:center; flex-direction:column; backdrop-filter:blur(10px);">
+          <div id="astrophoto-loader" style="position:relative; width:120px; height:120px; border-radius:50%; border:4px solid rgba(0,188,212,0.1); border-top-color:var(--accent); animation:spin 2s linear infinite; margin-bottom:20px;">
+            <div id="astrophoto-progress-text" style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); color:var(--text-primary); font-size:1.1rem; font-weight:bold; font-family:monospace;">0%</div>
+          </div>
+          <div id="astrophoto-status-text" style="color:var(--accent); font-weight:bold; font-size:1rem; margin-bottom:8px; text-shadow:0 0 10px var(--accent-glow);">シャッター解放中...</div>
+          <div id="astrophoto-sub-status" style="color:var(--text-secondary); font-size:0.8rem;">ノイズ除去中 & スタッキング実行中 (0 / 0 フレーム)</div>
+          <!-- スタッキング中の天体プレビュー (徐々にノイズが減っていく) -->
+          <div style="position:relative; width:280px; height:210px; margin-top:20px; border-radius:12px; border:1px solid var(--panel-border); overflow:hidden; background:#020208;">
+            <img id="astrophoto-preview-img" style="width:100%; height:100%; object-fit:cover; filter:blur(4px) opacity(0.3); transition:filter 0.5s;" src="">
+            <canvas id="astrophoto-noise-canvas" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; mix-blend-mode:screen; opacity:0.8;"></canvas>
+          </div>
+        </div>
+
+        <!-- 撮影結果カードモーダル -->
+        <div id="astrophoto-card-modal" style="display:none; position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:210; align-items:center; justify-content:center; backdrop-filter:blur(8px);">
+          <div class="panel" style="width:420px; display:flex; flex-direction:column; gap:16px; align-items:stretch; animation:fadeInUp 0.3s ease-out; position:relative; box-shadow:0 25px 50px rgba(0,0,0,0.8);">
+            <button id="btn-close-photo-modal" style="position:absolute; top:12px; right:12px; background:none; border:none; color:var(--text-secondary); font-size:1.2rem; cursor:pointer; z-index:10;">✕</button>
+            <div class="panel-title" style="margin-bottom:4px;">Astrophotography Card</div>
+            
+            <!-- 現像された写真カード本体 -->
+            <div id="astrophoto-card-container" style="background:#fff; color:#111; padding:16px; border-radius:8px; box-shadow:0 10px 30px rgba(0,0,0,0.5); font-family:'Noto Sans JP', sans-serif;">
+              <div style="width:100%; aspect-ratio:4/3; background:#000; border-radius:4px; overflow:hidden; position:relative;">
+                <img id="astrophoto-final-image" style="width:100%; height:100%; object-fit:cover;" src="">
+              </div>
+              <div style="margin-top:12px; border-top:1px solid #ddd; padding-top:12px;">
+                <div style="font-size:1.1rem; font-weight:bold; color:#222; text-align:left;" id="astrophoto-card-target-name">アンドロメダ銀河 (M31)</div>
+                <div style="font-size:0.75rem; color:#666; margin-top:2px; text-align:left;" id="astrophoto-card-target-type">渦巻銀河 (DSO)</div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px 12px; margin-top:10px; font-size:0.7rem; color:#444; border-top:1px dashed #eee; padding-top:8px; font-family:monospace; text-align:left;">
+                  <div>📅 DATE: <span id="astrophoto-card-date">-</span></div>
+                  <div>📍 LOC: <span id="astrophoto-card-loc">-</span></div>
+                  <div>⏱ EXP: <span id="astrophoto-card-exp">-</span></div>
+                  <div>⚡ ISO: <span id="astrophoto-card-iso">-</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div style="display:flex; gap:10px; margin-top:6px;">
+              <button id="btn-astrophoto-download" class="btn btn-accent" style="flex:1; padding:10px; border-radius:8px; font-weight:bold;">💾 保存 (PNGダウンロード)</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 

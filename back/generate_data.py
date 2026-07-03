@@ -228,6 +228,7 @@ def main():
     # ==========================================
     print("処理中: 恒星カタログ...")
     stars = []
+    uma_stars = {}
     for feature in stars_data['features']:
         hip = feature['id']
         props = feature['properties']
@@ -243,6 +244,12 @@ def main():
         ra = normalize_ra(coords[0])
         dec = round(float(coords[1]), 4)
 
+        if hip in [67301, 65378, 62956, 59774, 54061, 53910, 58001,
+                   46733, 48402, 47006, 41704, 42527, 44390, 45038,
+                   44127, 48319, 46853, 44248, 57399, 50372, 50801,
+                   55219, 55203, 54539]:
+            uma_stars[hip] = (ra, dec)
+
         # 短縮キー名でファイルサイズを削減
         stars.append({
             'h': hip,          # HIP番号
@@ -251,6 +258,68 @@ def main():
             'r': ra,           # 赤経 (時間)
             'd': dec,          # 赤緯 (度)
         })
+
+    # ==========================================
+    # UMa (おおぐま座) の星座線を手動で上書き
+    # ==========================================
+    uma_connections = [
+        # 北斗七星（胴体と尻尾）
+        (67301, 65378), # Alkaid - Mizar
+        (65378, 62956), # Mizar - Alioth
+        (62956, 59774), # Alioth - Megrez
+        (59774, 58001), # Megrez - Phecda
+        (58001, 53910), # Phecda - Merak
+        (53910, 54061), # Merak - Dubhe
+        (54061, 59774), # Dubhe - Megrez
+        
+        # 首から頭へ
+        (54061, 46733), # Dubhe - 23 UMa
+        (46733, 41704), # 23 UMa - Omicron
+        (41704, 42527), # Omicron - Pi 2
+        (42527, 44390), # Pi 2 - Rho
+        (44390, 45038), # Rho - Sigma 2
+        (45038, 46733), # Sigma 2 - 23 UMa
+        
+        # 首（23 UMa）から前足1へ
+        (46733, 48319), # 23 UMa - Theta
+        (48319, 46853), # Theta - Iota
+        (46853, 44248), # Iota - Kappa
+        
+        # 首（23 UMa）から前足2へ
+        (46733, 48402), # 23 UMa - Upsilon
+        (48402, 47006), # Upsilon - Phi
+        
+        # 胴体後部（Phecda）から後足へ
+        (58001, 57399), # Phecda - Chi
+        # 後足1
+        (57399, 50372), # Chi - Psi
+        (50372, 50801), # Psi - Mu
+        # 後足2
+        (57399, 55219), # Chi - Nu
+        (55219, 55203), # Nu - Xi
+    ]
+    
+    uma_segments = []
+    for h1, h2 in uma_connections:
+        if h1 in uma_stars and h2 in uma_stars:
+            r1, d1 = uma_stars[h1]
+            r2, d2 = uma_stars[h2]
+            uma_segments.append([r1, d1, r2, d2])
+            
+    if uma_segments:
+        lines['UMa'] = uma_segments
+        print(f"  おおぐま座(UMa)の星座線を再構築しました (セグメント数: {len(uma_segments)})")
+
+    # やまねこ座 (Lyn) がおおぐま座の足 (Kappa UMa: RA~9.01, Dec~41.78) に誤接続しているのを削除
+    if 'Lyn' in lines:
+        lyn_segments = []
+        for seg in lines['Lyn']:
+            if (abs(seg[0] - 9.01) < 0.02 and abs(seg[1] - 41.78) < 0.02) or \
+               (abs(seg[2] - 9.01) < 0.02 and abs(seg[3] - 41.78) < 0.02):
+                continue
+            lyn_segments.append(seg)
+        lines['Lyn'] = lyn_segments
+        print("  やまねこ座(Lyn)の誤った線を削除しました")
 
     # ==========================================
     # 出力

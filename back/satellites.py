@@ -12,7 +12,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 # builtin=True でローカルの timescales データを使用し、外部依存を減らす
 ts = load.timescale(builtin=True)
 
-STATIONS_URL = 'http://celestrak.org/NORAD/elements/stations.txt'
+STATIONS_URL = 'https://celestrak.org/NORAD/elements/stations.txt'
 
 def get_satellites_position(dt_utc: datetime, lat: float, lng: float) -> list:
     """
