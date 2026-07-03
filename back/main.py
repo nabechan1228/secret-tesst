@@ -788,26 +788,28 @@ def get_weather(
     lng: float = Query(139.76, ge=-180.0, le=180.0, description="観測経度 (度, -180 ~ 180)")
 ):
     """
-    指定された座標の現在天気を Open-Meteo API からプロキシして取得する。
+    指定された座標の現在天気を wttr.in API からプロキシして取得する。
     """
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lng}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,cloud_cover"
+    url = f"https://wttr.in/{lat},{lng}?format=j1"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Stellaris-Planetarium"})
         with urllib.request.urlopen(req, timeout=5) as response:
             data = json.loads(response.read().decode("utf-8"))
-            current = data.get("current", {})
+            current = data.get("current_condition", [{}])[0]
             return {
-                "temperature": float(current.get("temperature_2m", 15.0)),
-                "humidity": float(current.get("relative_humidity_2m", 50.0)),
-                "wind_speed": float(current.get("wind_speed_10m", 0.0)),
-                "cloud_cover": float(current.get("cloud_cover", 0.0)),
+                "temperature": float(current.get("temp_C", 15.0)),
+                "humidity": float(current.get("humidity", 50.0)),
+                "wind_speed": float(current.get("windspeedKmph", 0.0)),
+                "cloud_cover": float(current.get("cloudcover", 0.0)),
             }
     except Exception as e:
-        logger.error("天気APIの取得に失敗: %s", e)
-        raise HTTPException(
-            status_code=503,
-            detail="天気データを取得できませんでした。しばらく待ってから再試行してください。",
-        )
+        logger.warning("天気APIの取得に失敗したため、デフォルト値を返します: %s", e)
+        return {
+            "temperature": 15.0,
+            "humidity": 50.0,
+            "wind_speed": 3.0,
+            "cloud_cover": 10.0,
+        }
 
 @app.get("/health", response_model=HealthResponse)
 def health():
