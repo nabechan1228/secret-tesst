@@ -49,6 +49,10 @@ import {
   hideConstellationInfo
 } from './ui-helper';
 
+import { DSO_INFO_MAP } from './dso-info';
+import { renderLogbook, ObsLogEntry, loadLogData } from './logbook';
+import { fetchJson, warnSatelliteFetchOnce, resetSatelliteErrorFlag } from './api-fetch';
+
 // ==========================================
 // グローバル状態
 // ==========================================
@@ -3610,14 +3614,17 @@ let satellitesData: any[] = [];
 let satellitesSprites: Map<string, THREE.Sprite> = new Map();
 async function fetchSatellites() {
   const timeStr = encodeURIComponent(currentDate.toISOString());
-  try {
-    const res = await fetch(`${API_BASE}/api/satellites?lat=${latitude}&lng=${longitude}&time=${timeStr}`);
-    if (res.ok) {
-      const data = await res.json();
-      satellitesData = data.satellites || [];
-      updateSatelliteSprites();
-    }
-  } catch (err) {}
+  const data = await fetchJson<{ satellites?: unknown[] }>(
+    `${API_BASE}/api/satellites?lat=${latitude}&lng=${longitude}&time=${timeStr}`,
+    'Satellites'
+  );
+  if (data) {
+    resetSatelliteErrorFlag();
+    satellitesData = data.satellites || [];
+    updateSatelliteSprites();
+  } else {
+    warnSatelliteFetchOnce();
+  }
 }
 function updateSatelliteSprites() {
   satellitesData.forEach(sat => {
@@ -3810,38 +3817,6 @@ async function fetchMeteorShowersActivity() {
 }
 
 // 天体写真撮影
-const DSO_INFO_MAP: Record<string, { nameJa: string; type: string; file: string }> = {
-  M31: { nameJa: 'アンドロメダ銀河', type: '渦巻銀河 (DSO)', file: 'm31.png' },
-  M42: { nameJa: 'オリオン大星雲', type: '散光星雲 (DSO)', file: 'm42.png' },
-  M45: { nameJa: 'プレアデス星団 (すばる)', type: '散開星団 (DSO)', file: 'm45.png' },
-  M6: { nameJa: 'バタフライ星団', type: '散開星団 (DSO)', file: 'm6.png' },
-  M7: { nameJa: 'プトレマイオス星団', type: '散開星団 (DSO)', file: 'm7.png' },
-  M11: { nameJa: '野鴨星団', type: '散開星団 (DSO)', file: 'm11.png' },
-  M15: { nameJa: 'ペガスス座球状星団', type: '球状星団 (DSO)', file: 'm15.png' },
-  M24: { nameJa: 'いて座スタークラウド', type: '天の川の濃い部分 (DSO)', file: 'm24.png' },
-  M35: { nameJa: 'M35散開星団', type: '散開星団 (DSO)', file: 'm35.png' },
-  M78: { nameJa: 'M78反射星雲', type: '反射星雲 (DSO)', file: 'm78.png' },
-  M83: { nameJa: '南の回転花火銀河', type: '棒渦巻銀河 (DSO)', file: 'm83.png' },
-  M90: { nameJa: 'M90渦巻銀河', type: '渦巻銀河 (DSO)', file: 'm90.png' },
-  IC434: { nameJa: '馬頭星雲', type: '暗黒星雲 (DSO)', file: 'ic434.png' },
-  NGC2237: { nameJa: 'バラ星雲', type: '散光星雲 (DSO)', file: 'ngc2237.png' },
-  NGC869: { nameJa: '二重星団', type: '散開星団 (DSO)', file: 'ngc869.png' },
-  NGC7000: { nameJa: '北アメリカ星雲', type: '散光星雲 (DSO)', file: 'ngc7000.png' },
-  NGC6960: { nameJa: '網状星雲', type: '超新星残骸 (DSO)', file: 'ngc6960.png' },
-  NGC7293: { nameJa: 'らせん星雲', type: '惑星状星雲 (DSO)', file: 'ngc7293.png' },
-  NGC6543: { nameJa: 'キャッツアイ星雲', type: '惑星状星雲 (DSO)', file: 'ngc6543.png' },
-  Moon: { nameJa: '月', type: '衛星', file: 'moon.png' },
-  Sun: { nameJa: '太陽', type: '恒星', file: 'sun.png' },
-  Mercury: { nameJa: '水星', type: '惑星', file: 'mercury.png' },
-  Venus: { nameJa: '金星', type: '惑星', file: 'venus.png' },
-  Mars: { nameJa: '火星', type: '惑星', file: 'mars.png' },
-  Jupiter: { nameJa: '木星', type: '惑星', file: 'jupiter.png' },
-  Saturn: { nameJa: '土星', type: '惑星', file: 'saturn.png' },
-  Uranus: { nameJa: '天王星', type: '惑星', file: 'uranus.png' },
-  Neptune: { nameJa: '海王星', type: '惑星', file: 'neptune.png' },
-  Pluto: { nameJa: '冥王星', type: '準惑星', file: 'pluto.png' },
-};
-
 function updateAstrophotographyPanelVisibility() {
   const panel = document.getElementById('astrophotography-panel');
   if (!panel) return;
@@ -4101,26 +4076,13 @@ function initAstrophotography() {
 // 観測ログ、アチーブメント、オーロラUI、恒星スペック可視化の実装 (V2)
 // ==========================================
 
-interface ObsLogEntry {
-  id: string;
-  name: string;
-  type: string;
-  date: string;
-  lat: number;
-  lon: number;
-  isPhoto: boolean;
-  exp?: number;
-  iso?: number;
+interface ObsLogData {
+  observations: ObsLogEntry[];
+  badges: string[];
 }
 
 function addObservationLog(id: string, isPhoto: boolean, exp?: number, iso?: number) {
-  let logData = { observations: [] as ObsLogEntry[], badges: [] as string[] };
-  try {
-    const saved = localStorage.getItem('stellaris_observation_log');
-    if (saved) logData = JSON.parse(saved);
-  } catch (e) {
-    console.error(e);
-  }
+  const logData: ObsLogData = loadLogData();
 
   // 重複チェック (同じ天体での写真、または観察は一度だけログ追加)
   const duplicate = logData.observations.find(o => o.id === id && o.isPhoto === isPhoto);
@@ -4208,79 +4170,6 @@ function checkAchievements(logData: any) {
     if (!logData.badges) logData.badges = [];
     newBadges.forEach(b => logData.badges.push(b));
   }
-}
-
-function renderLogbook() {
-  const galleryContainer = document.getElementById('logbook-gallery')!;
-  let logData = { observations: [] as ObsLogEntry[], badges: [] as string[] };
-  try {
-    const saved = localStorage.getItem('stellaris_observation_log');
-    if (saved) logData = JSON.parse(saved);
-  } catch (e) {}
-
-  // ギャラリーの描画
-  galleryContainer.innerHTML = '';
-  const photos = logData.observations.filter(o => o.isPhoto);
-  if (photos.length === 0) {
-    galleryContainer.innerHTML = `<div style="color:var(--text-secondary); font-size:0.8rem; text-align:center; grid-column:span 2; margin-top:40px;">まだ撮影された写真はありません。</div>`;
-  } else {
-    photos.forEach(p => {
-      const card = document.createElement('div');
-      card.style.background = '#fff';
-      card.style.color = '#111';
-      card.style.padding = '8px';
-      card.style.borderRadius = '6px';
-      card.style.boxShadow = '0 4px 10px rgba(0,0,0,0.3)';
-      card.style.cursor = 'pointer';
-      card.style.transition = 'transform 0.2s';
-      card.innerHTML = `
-        <div style="width:100%; aspect-ratio:4/3; background:#000; border-radius:3px; overflow:hidden;">
-          <img src="/assets/${DSO_INFO_MAP[p.id]?.file}" style="width:100%; height:100%; object-fit:cover;">
-        </div>
-        <div style="margin-top:6px; font-size:0.75rem; text-align:left;">
-          <div style="font-weight:bold; color:#222;">${p.name}</div>
-          <div style="color:#666; font-size:0.65rem;">📅 ${p.date.split(' ')[0]} | ⏱ ${p.exp}s</div>
-        </div>
-      `;
-      card.onmouseover = () => { card.style.transform = 'scale(1.03)'; };
-      card.onmouseout = () => { card.style.transform = 'scale(1.0)'; };
-      
-      card.addEventListener('click', () => {
-        const link = document.createElement('a');
-        link.download = `stellaris_saved_${p.id}.png`;
-        link.href = `/assets/${DSO_INFO_MAP[p.id]?.file}`;
-        link.click();
-        showToast(`${p.name} の写真をダウンロードしました`, 'info');
-      });
-      galleryContainer.appendChild(card);
-    });
-  }
-
-  // バッジの不透明度更新
-  const badges = logData.badges || [];
-  const badgeList = ['first-light', 'messier-hunter', 'eclipse-chaser', 'city-astrophoto', 'aurora-expedition'];
-  const elementMap: Record<string, string> = {
-    'first-light': 'badge-first-light',
-    'messier-hunter': 'badge-messier-hunter',
-    'eclipse-chaser': 'badge-eclipse-chaser',
-    'city-astrophoto': 'badge-city-astrophoto',
-    'aurora-expedition': 'badge-aurora-expedition'
-  };
-
-  badgeList.forEach(b => {
-    const el = document.getElementById(elementMap[b]);
-    if (el) {
-      if (badges.includes(b)) {
-        el.style.opacity = '1';
-        el.style.background = 'rgba(0, 172, 193, 0.15)';
-        el.style.border = '1px solid rgba(0, 172, 193, 0.4)';
-      } else {
-        el.style.opacity = '0.3';
-        el.style.background = 'rgba(255,255,255,0.03)';
-        el.style.border = 'none';
-      }
-    }
-  });
 }
 
 function showStarPhysicalInfo(star: StarData) {
@@ -4561,9 +4450,9 @@ async function fetchWeather() {
     }
   } catch (e) {
     console.error('天気情報の取得に失敗しました:', e);
-    currentSeeing = 5;
-    if (weatherDescEl) weatherDescEl.textContent = '取得失敗 (快晴)';
-    if (seeingStarsEl) seeingStarsEl.textContent = '★★★★★';
+    currentSeeing = 3;
+    if (weatherDescEl) weatherDescEl.textContent = '取得失敗 (データなし)';
+    if (seeingStarsEl) seeingStarsEl.textContent = '★★★☆☆';
   }
 }
 

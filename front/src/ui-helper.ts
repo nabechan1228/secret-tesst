@@ -115,7 +115,7 @@ export function updatePlanetTrackerUI(
   if (!infoEl || !controlsEl) return;
 
   if (!planetRecommendation || planetRecommendation.score === 0) {
-    infoEl.innerHTML = '';
+    infoEl.replaceChildren();
     const msgEl = document.createElement('div');
     msgEl.style.cssText = 'font-size:0.82rem;color:var(--text-muted);';
     msgEl.textContent = '今夜は肉眼で見頃な惑星はありません。';
@@ -124,7 +124,7 @@ export function updatePlanetTrackerUI(
     return;
   }
 
-  infoEl.innerHTML = '';
+  infoEl.replaceChildren();
 
   const titleEl = document.createElement('div');
   titleEl.style.cssText = 'font-size:0.9rem;font-weight:bold;color:var(--gold);margin-bottom:6px;display:flex;align-items:center;gap:4px;';
