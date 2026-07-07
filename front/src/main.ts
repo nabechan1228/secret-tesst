@@ -110,7 +110,10 @@ let constellationMesh: THREE.LineSegments;
 let milkyWayParticles: THREE.Points;
 let mountainMesh: THREE.Group;      // 山並みシルエット
 let atmosphereRing: THREE.Mesh;
+let innerAtmoRing: THREE.Mesh;
+let zenithRing: THREE.Mesh;
 let celestialSphereGroup: THREE.Group; // 天球回転グループ
+
 
 let starsData: StarData[] = [];
 let constellationLinesData: ConstellationLineData[] = [];
@@ -167,6 +170,39 @@ let lunarEclipsePhase = 0.0;   // 月食の進行位相 (0→1)
 
 // 現在選択中の天体イベント
 let activeCelestialEventKey: string | null = null;
+
+// ==========================================
+// 今夜の星空プランナー 型定義
+// ==========================================
+
+interface SkyTonightItem {
+  name: string;
+  name_ja: string;
+  category: 'planet' | 'dso' | 'star';
+  type_label: string;
+  difficulty: '初心者' | '中級' | '上級';
+  score: number;
+  mag: number;
+  alt: number;
+  az: number;
+  ra: number;
+  dec: number;
+  visible_hours: number;
+  time_range: string;
+  description: string;
+  color: string;
+}
+
+interface SkyTonightData {
+  datetime: string;
+  items: SkyTonightItem[];
+  moon_phase: number;
+  moon_illumination: number;
+  moon_impact: '低' | '中' | '高';
+  seeing_tip: string;
+}
+
+let skyTonightData: SkyTonightData | null = null;
 
 
 
@@ -448,7 +484,7 @@ function init3D() {
     blending: THREE.AdditiveBlending,
     depthWrite: false,
   });
-  const innerAtmoRing = new THREE.Mesh(innerAtmoGeo, innerAtmoMat);
+  innerAtmoRing = new THREE.Mesh(innerAtmoGeo, innerAtmoMat);
   innerAtmoRing.rotation.x = Math.PI / 2;
   innerAtmoRing.position.y = 2;
   scene.add(innerAtmoRing);
@@ -462,7 +498,7 @@ function init3D() {
     blending: THREE.AdditiveBlending,
     depthWrite: false,
   });
-  const zenithRing = new THREE.Mesh(zenithRingGeo, zenithRingMat);
+  zenithRing = new THREE.Mesh(zenithRingGeo, zenithRingMat);
   zenithRing.position.y = DOME_RADIUS - 5;
   scene.add(zenithRing);
 
@@ -3856,6 +3892,262 @@ function tick() {
 }
 
 // ==========================================
+// 今夜の星空プランナー 機能
+// ==========================================
+
+async function fetchSkyTonight(): Promise<void> {
+  try {
+    const timeStr = encodeURIComponent(currentDate.toISOString());
+    const res = await fetch(`${API_BASE}/api/sky-tonight?lat=${latitude}&lng=${longitude}&time=${timeStr}`);
+    if (!res.ok) throw new Error(`sky-tonight API: ${res.status}`);
+    skyTonightData = await res.json();
+    renderSkyTonightPanel();
+  } catch (e) {
+    console.warn('今夜の星空プランナー: データ取得失敗', e);
+  }
+}
+
+function renderSkyTonightPanel(): void {
+  const data = skyTonightData;
+  if (!data) return;
+
+  const moonPhaseEl = document.getElementById('skt-moon-phase');
+  const moonIllumEl = document.getElementById('skt-moon-illumination');
+  const moonImpactEl = document.getElementById('skt-moon-impact');
+  const seeingTipEl = document.getElementById('skt-seeing-tip');
+
+  if (moonPhaseEl) moonPhaseEl.textContent = `月齢 ${data.moon_phase.toFixed(1)} 日`;
+  if (moonIllumEl) moonIllumEl.textContent = `輝面比 ${Math.round(data.moon_illumination * 100)}%`;
+  if (moonImpactEl) {
+    const impactMap: Record<string, { label: string; color: string }> = {
+      '低': { label: '低 (観察良好)', color: '#4caf50' },
+      '中': { label: '中 (影響あり)', color: '#ff9800' },
+      '高': { label: '高 (観察困難)', color: '#f44336' },
+    };
+    const imp = impactMap[data.moon_impact] || { label: data.moon_impact, color: '#aaa' };
+    moonImpactEl.textContent = `月明かり影響: ${imp.label}`;
+    moonImpactEl.style.color = imp.color;
+  }
+  if (seeingTipEl) seeingTipEl.textContent = data.seeing_tip;
+
+  const listEl = document.getElementById('sky-tonight-list');
+  if (!listEl) return;
+  listEl.replaceChildren();
+
+  if (data.items.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'color:var(--text-muted);font-size:0.85rem;text-align:center;padding:30px 0;';
+    empty.textContent = '現在時刻は目立つ天体が見つかりません。時間や場所を変えてお試しください。';
+    listEl.appendChild(empty);
+    return;
+  }
+
+  const difficultyStyle: Record<string, { bg: string; text: string; border: string }> = {
+    '初心者': { bg: 'rgba(76,175,80,0.15)',  text: '#81c784', border: 'rgba(76,175,80,0.4)' },
+    '中級':   { bg: 'rgba(255,152,0,0.15)', text: '#ffb74d', border: 'rgba(255,152,0,0.4)' },
+    '上級':   { bg: 'rgba(244,67,54,0.15)',  text: '#ef9a9a', border: 'rgba(244,67,54,0.4)' },
+  };
+  const categoryIcon: Record<string, string> = { planet: '🪐', dso: '🌌', star: '⭐' };
+
+  data.items.forEach((item: SkyTonightItem, idx: number) => {
+    const card = document.createElement('div');
+    card.id = `skt-card-${idx}`;
+    card.style.cssText = [
+      'display:grid',
+      'grid-template-columns:auto 1fr auto',
+      'gap:10px',
+      'align-items:start',
+      'background:rgba(255,255,255,0.04)',
+      'border:1px solid rgba(255,255,255,0.08)',
+      'border-radius:12px',
+      'padding:12px 14px',
+      'margin-bottom:10px',
+      'transition:background 0.2s,border-color 0.2s',
+    ].join(';');
+    card.onmouseover = () => { card.style.background = 'rgba(255,255,255,0.08)'; card.style.borderColor = `${item.color}55`; };
+    card.onmouseout  = () => { card.style.background = 'rgba(255,255,255,0.04)'; card.style.borderColor = 'rgba(255,255,255,0.08)'; };
+
+    // 左列: ランク + アイコン
+    const rankEl = document.createElement('div');
+    rankEl.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:4px;min-width:36px;';
+    const rankNum = document.createElement('div');
+    rankNum.style.cssText = `font-size:1.05rem;font-weight:bold;color:${idx===0?'#ffd700':idx===1?'#c0c0c0':idx===2?'#cd7f32':'var(--text-muted)'};`;
+    rankNum.textContent = `#${idx+1}`;
+    const iconEl = document.createElement('div');
+    iconEl.style.cssText = 'font-size:1.4rem;line-height:1;';
+    iconEl.textContent = categoryIcon[item.category] || '⭐';
+    rankEl.appendChild(rankNum);
+    rankEl.appendChild(iconEl);
+
+    // 中列: 情報
+    const infoEl = document.createElement('div');
+    infoEl.style.cssText = 'display:flex;flex-direction:column;gap:5px;min-width:0;';
+
+    const nameRow = document.createElement('div');
+    nameRow.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;';
+    const nameJaEl = document.createElement('span');
+    nameJaEl.style.cssText = 'font-weight:bold;font-size:0.95rem;color:var(--text-primary);';
+    nameJaEl.textContent = item.name_ja;
+    const typeEl = document.createElement('span');
+    typeEl.style.cssText = 'font-size:0.68rem;color:var(--text-muted);background:rgba(255,255,255,0.07);padding:1px 6px;border-radius:10px;';
+    typeEl.textContent = item.type_label;
+    const ds = difficultyStyle[item.difficulty] || difficultyStyle['中級'];
+    const diffEl = document.createElement('span');
+    diffEl.style.cssText = `font-size:0.65rem;padding:1px 8px;border-radius:10px;background:${ds.bg};color:${ds.text};border:1px solid ${ds.border};`;
+    diffEl.textContent = item.difficulty;
+    nameRow.appendChild(nameJaEl);
+    nameRow.appendChild(typeEl);
+    nameRow.appendChild(diffEl);
+
+    const statsRow = document.createElement('div');
+    statsRow.style.cssText = 'font-size:0.7rem;color:var(--text-secondary);display:flex;gap:10px;flex-wrap:wrap;';
+    const makeStat = (label: string, val: string) => {
+      const s = document.createElement('span');
+      s.innerHTML = `<span style="color:var(--text-muted)">${label}</span> <strong style="color:var(--text-primary)">${val}</strong>`;
+      return s;
+    };
+    statsRow.appendChild(makeStat('高度', `${item.alt.toFixed(0)}°`));
+    statsRow.appendChild(makeStat('等級', `${item.mag.toFixed(1)}等`));
+    if (item.visible_hours > 0) statsRow.appendChild(makeStat('観察可能', item.time_range));
+
+    const descEl = document.createElement('div');
+    descEl.style.cssText = 'font-size:0.72rem;color:var(--text-muted);line-height:1.5;';
+    descEl.textContent = item.description;
+
+    infoEl.appendChild(nameRow);
+    infoEl.appendChild(statsRow);
+    infoEl.appendChild(descEl);
+
+    // 右列: 追跡ボタン + スコアバー
+    const trackDiv = document.createElement('div');
+    trackDiv.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:6px;';
+    const trackBtn = document.createElement('button');
+    trackBtn.id = `skt-track-btn-${idx}`;
+    trackBtn.style.cssText = [
+      'background:rgba(0,188,212,0.15)',
+      'border:1px solid rgba(0,188,212,0.4)',
+      'color:#00bcd4',
+      'font-size:0.68rem',
+      'padding:4px 10px',
+      'border-radius:8px',
+      'cursor:pointer',
+      'white-space:nowrap',
+      'transition:background 0.15s',
+    ].join(';');
+    trackBtn.textContent = '👁 追跡';
+    trackBtn.onmouseover = () => trackBtn.style.background = 'rgba(0,188,212,0.3)';
+    trackBtn.onmouseout  = () => trackBtn.style.background = 'rgba(0,188,212,0.15)';
+    trackBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      focusOnObject(item.az, item.alt);
+      if (item.category === 'planet') {
+        activeTrackPlanet = item.name;
+        isPlanetLockOn = true;
+        guideTarget = { az: item.az, alt: item.alt };
+        isAutoRotatingToGuide = true;
+        const lockCb = document.getElementById('toggle-planet-lock') as HTMLInputElement;
+        if (lockCb) lockCb.checked = true;
+      } else {
+        guideTarget = { az: item.az, alt: item.alt };
+        isAutoRotatingToGuide = true;
+      }
+      showToast(`${item.name_ja} に視点を移動します`, 'info');
+      const modal = document.getElementById('sky-tonight-modal');
+      if (modal) modal.style.display = 'none';
+    });
+
+    const maxScore = data.items[0]?.score || 1;
+    const pct = Math.round((item.score / maxScore) * 100);
+    const barOuter = document.createElement('div');
+    barOuter.style.cssText = 'width:36px;height:4px;background:rgba(255,255,255,0.1);border-radius:2px;overflow:hidden;';
+    const barInner = document.createElement('div');
+    barInner.style.cssText = `height:100%;width:${pct}%;background:${item.color};border-radius:2px;`;
+    barOuter.appendChild(barInner);
+    const scoreLabel = document.createElement('div');
+    scoreLabel.style.cssText = 'font-size:0.58rem;color:var(--text-muted);text-align:center;margin-top:2px;';
+    scoreLabel.textContent = `${item.score.toFixed(0)}pt`;
+    trackDiv.appendChild(trackBtn);
+    trackDiv.appendChild(barOuter);
+    trackDiv.appendChild(scoreLabel);
+
+    card.appendChild(rankEl);
+    card.appendChild(infoEl);
+    card.appendChild(trackDiv);
+    listEl.appendChild(card);
+  });
+}
+
+function initSkyTonightUI(): void {
+  const modal = document.createElement('div');
+  modal.id = 'sky-tonight-modal';
+  modal.style.cssText = [
+    'display:none',
+    'position:fixed',
+    'inset:0',
+    'background:rgba(0,0,0,0.75)',
+    'z-index:9500',
+    'justify-content:center',
+    'align-items:center',
+    'backdrop-filter:blur(4px)',
+  ].join(';');
+
+  const panel = document.createElement('div');
+  panel.style.cssText = [
+    'background:linear-gradient(135deg, #0d1b2a 0%, #1a2744 100%)',
+    'border:1px solid rgba(0,188,212,0.25)',
+    'border-radius:18px',
+    'padding:24px',
+    'width:min(640px,95vw)',
+    'max-height:85vh',
+    'overflow-y:auto',
+    'box-shadow:0 0 40px rgba(0,188,212,0.15)',
+    'scrollbar-width:thin',
+    'scrollbar-color:rgba(0,188,212,0.3) transparent',
+  ].join(';');
+
+  panel.innerHTML = [
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">',
+    '  <div>',
+    '    <div style="font-size:1.2rem;font-weight:bold;color:#e8f5e9;">🌠 今夜の星空プランナー</div>',
+    '    <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px;">現在位置・日時に基づく観察おすすめトップ5天体</div>',
+    '  </div>',
+    '  <button id="btn-close-sky-tonight" style="background:none;border:1px solid rgba(255,255,255,0.2);color:rgba(255,255,255,0.7);font-size:1.1rem;width:32px;height:32px;border-radius:50%;cursor:pointer;">&times;</button>',
+    '</div>',
+    '<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:12px 16px;margin-bottom:14px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">',
+    '  <div style="text-align:center;"><div style="font-size:0.62rem;color:var(--text-muted);">🌙 月齢</div><div id="skt-moon-phase" style="font-size:0.88rem;font-weight:bold;color:var(--text-primary);">--</div></div>',
+    '  <div style="text-align:center;border-left:1px solid rgba(255,255,255,0.08);border-right:1px solid rgba(255,255,255,0.08);"><div style="font-size:0.62rem;color:var(--text-muted);">&#9728; 輝面比</div><div id="skt-moon-illumination" style="font-size:0.88rem;font-weight:bold;color:var(--text-primary);">--</div></div>',
+    '  <div style="text-align:center;"><div style="font-size:0.62rem;color:var(--text-muted);">&#9889; 影響度</div><div id="skt-moon-impact" style="font-size:0.88rem;font-weight:bold;">--</div></div>',
+    '</div>',
+    '<div id="skt-seeing-tip" style="font-size:0.76rem;color:#b0bec5;background:rgba(0,188,212,0.06);border-left:3px solid rgba(0,188,212,0.5);padding:10px 14px;border-radius:6px;margin-bottom:14px;line-height:1.6;">--</div>',
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">',
+    '  <div style="font-size:0.78rem;font-weight:bold;color:var(--text-secondary);">★ おすすめランキング</div>',
+    '  <button id="btn-skt-refresh" style="font-size:0.68rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:var(--text-muted);padding:3px 10px;border-radius:8px;cursor:pointer;">🔄 更新</button>',
+    '</div>',
+    '<div id="sky-tonight-list"></div>',
+  ].join('');
+
+  modal.appendChild(panel);
+  document.body.appendChild(modal);
+
+  document.getElementById('btn-close-sky-tonight')?.addEventListener('click', () => { modal.style.display = 'none'; });
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.style.display = 'none'; });
+
+  document.getElementById('btn-skt-refresh')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-skt-refresh');
+    if (btn) btn.textContent = '取得中...';
+    await fetchSkyTonight();
+    if (btn) btn.textContent = '🔄 更新';
+  });
+
+  // サイドパネルの「今夜の星空プランナー」ボタンにイベントを登録
+  document.getElementById('btn-open-sky-tonight')?.addEventListener('click', async () => {
+    modal.style.display = 'flex';
+    if (!skyTonightData) await fetchSkyTonight();
+    else renderSkyTonightPanel();
+  });
+}
+
+// ==========================================
 // 起動
 // ==========================================
 
@@ -3869,11 +4161,14 @@ async function start() {
   initAstrophotography();
   updateLightPollutionFog();
   initEnhancedFeaturesV2();
+  initSkyTonightUI();
   fetchWeather();
   await loadFromAPI();
+  fetchSkyTonight();
   if (Object.keys(constellationMeta).length > 0) {
     populateConstellationSelect(constellationMeta);
   }
+
   showToast(`Stellaris 起動完了 - ${starsData.length}星 / 88星座 / 惑星${planetsData.length}`, 'info');
   introStartTime = performance.now();
   
