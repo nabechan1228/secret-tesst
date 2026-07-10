@@ -53,6 +53,10 @@ import { DSO_INFO_MAP } from './dso-info';
 import { renderLogbook, ObsLogEntry, loadLogData } from './logbook';
 import { fetchJson, warnSatelliteFetchOnce, resetSatelliteErrorFlag } from './api-fetch';
 
+import { CELESTIAL_EVENTS, METEOR_SHOWERS } from './celestial-events-data';
+import { effectsState, initAurora, updateAurora, updateMeteors, clearMeteors } from './effects-system';
+import { drawLightPollution, drawClouds, drawMoonMapOverlay, drawObservationMask } from './overlay-renderer';
+
 // ==========================================
 // グローバル状態
 // ==========================================
@@ -106,7 +110,10 @@ let constellationMesh: THREE.LineSegments;
 let milkyWayParticles: THREE.Points;
 let mountainMesh: THREE.Group;      // 山並みシルエット
 let atmosphereRing: THREE.Mesh;
+let innerAtmoRing: THREE.Mesh;
+let zenithRing: THREE.Mesh;
 let celestialSphereGroup: THREE.Group; // 天球回転グループ
+
 
 let starsData: StarData[] = [];
 let constellationLinesData: ConstellationLineData[] = [];
@@ -144,14 +151,7 @@ let touchStartTime = 0;
 // 拡張機能 (Enhanced Features) 状態
 // ==========================================
 let bortleScale = 4;
-let showMeteors = false;
-let activeMeteorShower = 'perseids';
-let showAurora = false;
 let sunAlt = -20;
-let auroraKp = 3;
-let auroraOpacity = 0;
-let auroraMesh: THREE.Mesh | null = null;
-let auroraMaterial: THREE.ShaderMaterial | null = null;
 let isForceNightMode = false;
 let showMoonMap = false;
 let currentSeeing = 5;
@@ -159,31 +159,6 @@ let currentCloudCover = 0.0;
 let weatherTemp = 15.0;
 let weatherWind = 5.0;
 let planetSystemGroup: THREE.Group | null = null;
-
-interface MeteorShower {
-  name: string;
-  ra: number; // hours
-  dec: number; // degrees
-  color: string;
-}
-
-const METEOR_SHOWERS: Record<string, MeteorShower> = {
-  perseids: { name: 'ペルセウス座流星群', ra: 3.1, dec: 58.0, color: '#e0f7fa' },
-  geminids: { name: 'ふたご座流星群', ra: 7.5, dec: 33.0, color: '#fff9c4' },
-  quadrantids: { name: 'しぶんぎ座流星群', ra: 15.3, dec: 49.0, color: '#e1bee7' },
-  lyrids: { name: 'こと座流星群', ra: 18.2, dec: 34.0, color: '#f1f8e9' }
-};
-
-interface ActiveMeteor {
-  line: THREE.Line;
-  origin: THREE.Vector3;
-  dir: THREE.Vector3;
-  speed: number;
-  length: number;
-  life: number;
-  decay: number;
-}
-let activeMeteors: ActiveMeteor[] = [];
 
 // 日食・月食のリアルタイム計算状態
 let isSolarEclipse = false;
@@ -196,81 +171,38 @@ let lunarEclipsePhase = 0.0;   // 月食の進行位相 (0→1)
 // 現在選択中の天体イベント
 let activeCelestialEventKey: string | null = null;
 
-interface CelestialEvent {
+// ==========================================
+// 今夜の星空プランナー 型定義
+// ==========================================
+
+interface SkyTonightItem {
   name: string;
-  lat: number;
-  lng: number;
-  date: string;
+  name_ja: string;
+  category: 'planet' | 'dso' | 'star';
+  type_label: string;
+  difficulty: '初心者' | '中級' | '上級';
+  score: number;
+  mag: number;
+  alt: number;
+  az: number;
+  ra: number;
+  dec: number;
+  visible_hours: number;
+  time_range: string;
   description: string;
-  fov?: number;
-  target?: string;
-  timelapseStart?: string;
-  timelapseEnd?: string;
-  // 月食・日食の詳細タイムライン（JST文字列）
-  eclipseType?: 'lunar' | 'solar';
-  eclipseSubType?: 'annular' | 'total';  // 金環食 or 皆既食
-  eclipseStart?: string;   // 食の始まり（本影食始）
-  eclipsePeak?: string;    // 食の最大
-  eclipseEnd?: string;     // 食の終わり（本影食終）
+  color: string;
 }
 
-const CELESTIAL_EVENTS: Record<string, CelestialEvent> = {
-  'eclipse-2012': {
-    name: '2012年 金環日食 (東京)',
-    lat: 35.68,
-    lng: 139.76,
-    date: '2012-05-21T07:32:00+09:00',
-    description: '東京で観測された非常に美しい金環日食。太陽と月がほぼ完全に重なり、リング状になりました。タイムラプスで食の進行が再生されます。',
-    fov: 1.5,
-    target: 'Sun',
-    timelapseStart: '2012-05-21T06:50:00+09:00',
-    timelapseEnd: '2012-05-21T08:15:00+09:00',
-    eclipseType: 'solar',
-    eclipseSubType: 'annular',
-    eclipseStart: '2012-05-21T06:58:00+09:00',
-    eclipsePeak: '2012-05-21T07:32:00+09:00',
-    eclipseEnd: '2012-05-21T08:08:00+09:00'
-  },
-  'eclipse-2022': {
-    name: '2022年 皆既月食 (東京)',
-    lat: 35.68,
-    lng: 139.76,
-    date: '2022-11-08T19:59:00+09:00',
-    description: '日本全国で好条件で観測された皆既月食。月が地球の本影に入り、幻想的な赤銅色（ブラッドムーン）に染まりました。タイムラプスで食の進行が再生されます。',
-    fov: 1.5,
-    target: 'Moon',
-    timelapseStart: '2022-11-08T18:45:00+09:00',
-    timelapseEnd: '2022-11-08T21:10:00+09:00',
-    eclipseType: 'lunar',
-    eclipseStart: '2022-11-08T18:09:00+09:00',   // 本影食始
-    eclipsePeak:  '2022-11-08T19:59:00+09:00',   // 食の最大
-    eclipseEnd:   '2022-11-08T21:49:00+09:00'    // 本影食終
-  },
-  'eclipse-2026': {
-    name: '2026年 皆既月食 (東京)',
-    lat: 35.68,
-    lng: 139.76,
-    date: '2026-03-03T20:30:00+09:00',
-    description: '2026年3月に発生する皆既月食のシミュレーション。月の欠け始めから皆既までの様子を観察できます。タイムラプスで食の進行が再生されます。',
-    fov: 1.5,
-    target: 'Moon',
-    timelapseStart: '2026-03-03T19:15:00+09:00',
-    timelapseEnd: '2026-03-03T21:40:00+09:00',
-    eclipseType: 'lunar',
-    eclipseStart: '2026-03-03T19:31:00+09:00',
-    eclipsePeak:  '2026-03-03T20:47:00+09:00',
-    eclipseEnd:   '2026-03-03T22:02:00+09:00'
-  },
-  'conjunction-2020': {
-    name: '2020年 木星・土星超大接近',
-    lat: 35.68,
-    lng: 139.76,
-    date: '2020-12-21T17:30:00+09:00',
-    description: '約400年ぶりとなる木星と土星の超大接近。望遠鏡の同一視野内に木星のガリレオ衛星と土星の環が同時に収まりました。',
-    fov: 0.4,
-    target: 'Jupiter'
-  }
-};
+interface SkyTonightData {
+  datetime: string;
+  items: SkyTonightItem[];
+  moon_phase: number;
+  moon_illumination: number;
+  moon_impact: '低' | '中' | '高';
+  seeing_tip: string;
+}
+
+let skyTonightData: SkyTonightData | null = null;
 
 
 
@@ -552,7 +484,7 @@ function init3D() {
     blending: THREE.AdditiveBlending,
     depthWrite: false,
   });
-  const innerAtmoRing = new THREE.Mesh(innerAtmoGeo, innerAtmoMat);
+  innerAtmoRing = new THREE.Mesh(innerAtmoGeo, innerAtmoMat);
   innerAtmoRing.rotation.x = Math.PI / 2;
   innerAtmoRing.position.y = 2;
   scene.add(innerAtmoRing);
@@ -566,7 +498,7 @@ function init3D() {
     blending: THREE.AdditiveBlending,
     depthWrite: false,
   });
-  const zenithRing = new THREE.Mesh(zenithRingGeo, zenithRingMat);
+  zenithRing = new THREE.Mesh(zenithRingGeo, zenithRingMat);
   zenithRing.position.y = DOME_RADIUS - 5;
   scene.add(zenithRing);
 
@@ -594,59 +526,7 @@ function init3D() {
   buildDsoPhotos();
 
   // オーロラ Mesh 初期化
-  const auroraGeo = new THREE.PlaneGeometry(800, 250, 60, 20);
-  auroraGeo.rotateX(-Math.PI / 5); 
-  auroraGeo.translate(0, 160, -350); 
-
-  auroraMaterial = new THREE.ShaderMaterial({
-    uniforms: {
-      uTime: { value: 0.0 },
-      uKp: { value: 3.0 },
-      uOpacity: { value: 0.0 },
-    },
-    vertexShader: `
-      uniform float uTime;
-      uniform float uKp;
-      varying vec2 vUv;
-      varying float vNoise;
-      void main() {
-        vUv = uv;
-        float speed = uTime * (0.35 + uKp * 0.1);
-        float amp = 8.0 + uKp * 5.0;
-        float wave = sin(position.x * 0.015 + speed) * cos(position.y * 0.02 + speed * 0.8) * amp;
-        wave += sin(position.x * 0.035 - speed * 1.3) * 5.0;
-        vec3 pos = position;
-        pos.z += wave;
-        vNoise = wave / (amp + 5.0);
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
-      }
-    `,
-    fragmentShader: `
-      uniform float uKp;
-      uniform float uOpacity;
-      varying vec2 vUv;
-      varying float vNoise;
-      void main() {
-        vec3 green = vec3(0.0, 1.0, 0.3);
-        vec3 red = vec3(0.95, 0.0, 0.5);
-        vec3 baseColor = mix(green, red, vUv.y * (0.25 + uKp * 0.07));
-        float verticalStreaks = sin(vUv.x * 120.0 + vNoise * 6.0) * cos(vUv.x * 55.0 - vNoise * 3.0);
-        verticalStreaks = smoothstep(-0.55, 0.75, verticalStreaks) * 0.4 + 0.6;
-        float alpha = sin(vUv.y * 3.14159) * verticalStreaks;
-        alpha *= (0.05 + (uKp / 9.0) * 0.55);
-        alpha *= uOpacity;
-        gl_FragColor = vec4(baseColor, alpha);
-      }
-    `,
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide
-  });
-
-  auroraMesh = new THREE.Mesh(auroraGeo, auroraMaterial);
-  auroraMesh.visible = false;
-  scene.add(auroraMesh);
+  initAurora(scene);
 
   planetSystemGroup = new THREE.Group();
   scene.add(planetSystemGroup);
@@ -666,6 +546,8 @@ async function loadFromAPI(): Promise<void> {
   const statusEl = document.getElementById('loading-status');
   if (statusEl) statusEl.textContent = 'APIからデータ取得中...';
 
+  let skyData: Record<string, unknown> | null = null;
+
   try {
     const metaRes = await fetch(`${API_BASE}/api/constellations`);
     if (metaRes.ok) {
@@ -673,9 +555,18 @@ async function loadFromAPI(): Promise<void> {
       constellationMeta = metaData.constellations;
     }
 
-    const skyData = await fetchSkyData();
+    skyData = await fetchSkyData();
     if (!skyData) throw new Error('Sky API error');
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error('API load failed:', errMsg, err);
+    if (statusEl) statusEl.textContent = 'APIエラー: バックエンドを起動してください';
+    showToast('バックエンドAPIに接続できません。', 'error');
+    return;
+  }
 
+  // API取得成功 - 描画処理（ここでのエラーはAPIエラートーストを出さない）
+  try {
     applySkyData(skyData);
 
     if (statusEl) statusEl.textContent = `${starsData.length}星 / 感星${planetsData.length} / DSO${dsoData.length}天体`;
@@ -684,13 +575,12 @@ async function loadFromAPI(): Promise<void> {
     allocateConstellationBuffer();
     buildStarSprites();
     syncStarsToWorker();
-
-  } catch (err) {
-    console.error('API load failed:', err);
+  } catch (renderErr) {
+    console.error('描画処理中にエラーが発生しました:', renderErr);
     if (statusEl) statusEl.textContent = 'APIエラー: バックエンドを起動してください';
-    showToast('バックエンドAPIに接続できません。', 'error');
   }
 }
+
 
 async function fetchSkyData(): Promise<Record<string, unknown> | null> {
   const timeStr = encodeURIComponent(currentDate.toISOString());
@@ -698,7 +588,7 @@ async function fetchSkyData(): Promise<Record<string, unknown> | null> {
     `${API_BASE}/api/sky?lat=${latitude}&lng=${longitude}&mag_limit=6.0&time=${timeStr}`
   );
   if (!skyRes.ok) {
-    console.warn(`Sky API responded with status: ${skyRes.status}`);
+    console.warn(`Sky API responded with status: ${skyRes.status} ${skyRes.statusText}`);
     return null;
   }
   return skyRes.json();
@@ -886,205 +776,6 @@ function buildStarSprites() {
 // 光害グラデーションドーム（2D Overlay）
 // ==========================================
 
-function drawLightPollution(w: number, h: number, lst: number) {
-  const sun = planetsData.find(p => p.name === 'Sun');
-  sunAlt = -20;
-  if (sun) {
-    const hor = equatorialToHorizontal(sun.ra, sun.dec, lst, latitude);
-    sunAlt = hor.alt;
-  }
-  const effectiveSunAlt = isForceNightMode ? -20 : sunAlt;
-  let sunFade = 1.0;
-  if (effectiveSunAlt > -8) {
-    sunFade = Math.max(0.0, 1.0 - (effectiveSunAlt + 8) / 8.0);
-  }
-
-  // 日食が進行している時は、食の割合に応じて空の明るさを強制的に下げる
-  let eclipseFade = 1.0;
-  if (isSolarEclipse) {
-    // 完全に重なると空はほぼ夜になる (皆既日食)
-    eclipseFade = Math.max(0.02, 1.0 - eclipseRatio * 0.98);
-  }
-
-  // 新宿などの都会での夜間光害スカイグロー (昼間・薄明時は太陽光にかき消されるため sunFade が十分に低いときに適用)
-  if (bortleScale >= 2 && sunFade < 0.15) {
-    ctx2d.save();
-    // 都会であるほど明るい青白・茶色グローが空全体にかかり、星空のコントラストが落ちる
-    const glowAlpha = ((bortleScale - 1) / 8.0) * 0.14 * (1.0 - sunFade);
-    ctx2d.fillStyle = `rgba(180, 195, 230, ${glowAlpha})`;
-    ctx2d.fillRect(0, 0, w, h);
-    ctx2d.restore();
-  }
-
-  if (sunFade * eclipseFade <= 0.01) return;
-
-  const horizonAzimuths = [0, 45, 90, 135, 180, 225, 270, 315];
-  const horizonScreenY: number[] = [];
-
-  for (const az of horizonAzimuths) {
-    const pos3d = horizonToCartesian(az, 0.01, DOME_RADIUS);
-    const scr = getScreenPosition(pos3d, camera, overlayCanvas);
-    if (scr.visible) horizonScreenY.push(scr.y);
-  }
-
-  if (horizonScreenY.length === 0) return;
-
-  const baseY = Math.max(...horizonScreenY);
-  if (baseY >= h) return;
-
-  const fadeThreshold = h * 0.80;
-  const fadeAlpha = baseY < fadeThreshold
-    ? 1.0
-    : 1.0 - (baseY - fadeThreshold) / (h - fadeThreshold);
-
-  if (fadeAlpha <= 0.01) return;
-
-  const pos20 = horizonToCartesian(viewAzimuth, 20, DOME_RADIUS);
-  const scr20 = getScreenPosition(pos20, camera, overlayCanvas);
-  const alt20Y = scr20.visible ? scr20.y : baseY - Math.min(gradEstimate(h), baseY - 20);
-
-  const gradHeight = Math.max(80, baseY - alt20Y);
-
-  ctx2d.save();
-  ctx2d.globalAlpha = fadeAlpha * sunFade * eclipseFade;
-
-  {
-    const grad = ctx2d.createLinearGradient(0, baseY, 0, baseY - gradHeight);
-    grad.addColorStop(0.00, 'rgba(180, 200, 230, 0.28)');
-    grad.addColorStop(0.15, 'rgba(130, 160, 195, 0.18)');
-    grad.addColorStop(0.35, 'rgba( 80, 110, 160, 0.12)');
-    grad.addColorStop(0.60, 'rgba( 40,  60, 120, 0.06)');
-    grad.addColorStop(0.85, 'rgba( 15,  25,  70, 0.02)');
-    grad.addColorStop(1.00, 'rgba(  5,  10,  40, 0.00)');
-    ctx2d.fillStyle = grad;
-    ctx2d.fillRect(0, baseY - gradHeight, w, gradHeight + (h - baseY) + 10);
-  }
-
-  {
-    const cx = w * 0.5;
-    const cy = baseY + 20;
-    const rx = w * 0.55;
-    const ry = gradHeight * 0.40;
-
-    ctx2d.save();
-    ctx2d.scale(1.0, ry / rx);
-    const haloGrad = ctx2d.createRadialGradient(
-      cx, cy * (rx / ry), 0,
-      cx, cy * (rx / ry), rx
-    );
-    haloGrad.addColorStop(0.0,  'rgba(215, 230, 255, 0.10)');
-    haloGrad.addColorStop(0.35, 'rgba(170, 195, 235, 0.05)');
-    haloGrad.addColorStop(0.70, 'rgba(120, 150, 200, 0.02)');
-    haloGrad.addColorStop(1.0,  'rgba(80,  110, 160, 0.00)');
-    ctx2d.fillStyle = haloGrad;
-    ctx2d.fillRect(0, (cy - ry) * (rx / ry), w, ry * 2.5 * (rx / ry));
-    ctx2d.restore();
-  }
-
-  ctx2d.restore();
-}
-
-function drawMoonMapOverlay(w: number, h: number) {
-  if (!showMoonMap || observationMode !== 'telescope' || activeTrackPlanet !== 'Moon') return;
-  
-  const moonSprite = dsoPhotoObjects.get('Moon');
-  if (!moonSprite || !moonSprite.visible) return;
-  
-  const pos = new THREE.Vector3();
-  moonSprite.getWorldPosition(pos);
-  
-  const tempPos = pos.clone().project(camera);
-  if (tempPos.z > 1.0) return; 
-  
-  const centerX = (tempPos.x * 0.5 + 0.5) * w;
-  const centerY = (-tempPos.y * 0.5 + 0.5) * h;
-  
-  const dist = camera.position.distanceTo(pos);
-  const fovRad = (camera.fov * Math.PI) / 180;
-  const moon3dRadius = 8.7 * 0.5; 
-  const moonScreenRadius = (moon3dRadius / (dist * Math.tan(fovRad * 0.5))) * (h * 0.5);
-  
-  if (moonScreenRadius < 15) return;
-  
-  const MOON_FEATURES = [
-    { name: 'コペルニクス (Copernicus)', x: -0.25, y: 0.15 },
-    { name: 'ティコ (Tycho)', x: -0.1, y: -0.6 },
-    { name: 'ケプラー (Kepler)', x: -0.48, y: 0.08 },
-    { name: 'プラトン (Plato)', x: -0.1, y: 0.65 },
-    { name: '雨の海 (Mare Imbrium)', x: -0.2, y: 0.38 },
-    { name: '静かの海 (Tranquillitatis)', x: 0.35, y: 0.12 },
-    { name: '晴れの海 (Mare Serenitatis)', x: 0.18, y: 0.32 },
-    { name: '危機の海 (Mare Crisium)', x: 0.62, y: 0.18 },
-    { name: '豊かの海 (Mare Fecunditatis)', x: 0.58, y: -0.12 },
-    { name: '神酒の海 (Mare Nectaris)', x: 0.38, y: -0.28 },
-    { name: '嵐の大洋 (Procellarum)', x: -0.58, y: 0.02 },
-    { name: '雲の海 (Mare Nubium)', x: -0.22, y: -0.38 }
-  ];
-  
-  ctx2d.save();
-  ctx2d.font = "9px 'Outfit', sans-serif";
-  ctx2d.textBaseline = "middle";
-  
-  MOON_FEATURES.forEach(f => {
-    const fx = centerX + f.x * moonScreenRadius;
-    const fy = centerY - f.y * moonScreenRadius; 
-    
-    if (fx < 0 || fx > w || fy < 0 || fy > h) return;
-    
-    ctx2d.strokeStyle = 'rgba(0, 255, 204, 0.45)';
-    ctx2d.lineWidth = 1;
-    ctx2d.beginPath();
-    ctx2d.arc(fx, fy, 2, 0, Math.PI * 2);
-    ctx2d.stroke();
-    
-    const textOffset = f.x >= 0 ? 10 : -10;
-    const textAlign = f.x >= 0 ? 'left' : 'right';
-    ctx2d.textAlign = textAlign;
-    
-    ctx2d.beginPath();
-    ctx2d.moveTo(fx, fy);
-    ctx2d.lineTo(fx + textOffset, fy - 6);
-    ctx2d.lineTo(fx + textOffset + (f.x >= 0 ? 15 : -15), fy - 6);
-    ctx2d.stroke();
-    
-    ctx2d.fillStyle = 'rgba(0,0,0,0.85)';
-    ctx2d.fillText(f.name, fx + textOffset + (f.x >= 0 ? 17 : -17) + 1, fy - 5);
-    ctx2d.fillStyle = 'rgba(0, 255, 204, 0.9)';
-    ctx2d.fillText(f.name, fx + textOffset + (f.x >= 0 ? 17 : -17), fy - 6);
-  });
-  
-  ctx2d.restore();
-}
-
-function drawClouds(w: number, h: number) {
-  if (currentCloudCover <= 5) return;
-
-  ctx2d.save();
-  const baseOpacity = (currentCloudCover / 100) * 0.35;
-  const time = currentDate.getTime() * 0.00002;
-
-  const numClouds = 8;
-  for (let i = 0; i < numClouds; i++) {
-    const seed = i * 1.7;
-    const cx = ((Math.sin(time * 0.5 + seed) * 0.4 + 0.5) * w);
-    const cy = ((Math.cos(time * 0.3 + seed * 1.2) * 0.3 + 0.4) * h);
-    const r = (0.2 + 0.25 * (Math.sin(time * 0.2 + seed) * 0.5 + 0.5)) * Math.min(w, h);
-
-    const grad = ctx2d.createRadialGradient(cx, cy, r * 0.1, cx, cy, r);
-    grad.addColorStop(0.0, `rgba(235, 240, 250, ${baseOpacity})`);
-    grad.addColorStop(0.4, `rgba(220, 225, 235, ${baseOpacity * 0.7})`);
-    grad.addColorStop(0.8, `rgba(200, 210, 225, ${baseOpacity * 0.25})`);
-    grad.addColorStop(1.0, 'rgba(200, 210, 225, 0)');
-
-    ctx2d.fillStyle = grad;
-    ctx2d.beginPath();
-    ctx2d.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx2d.fill();
-  }
-
-  ctx2d.restore();
-}
-
 let lastSystemPlanet = '';
 const systemMoonsMap: Map<string, THREE.Object3D> = new Map();
 
@@ -1257,12 +948,6 @@ function updatePlanetSystemOrbits(pid: string, sprite: THREE.Sprite) {
 }
 
 
-function gradEstimate(h: number): number {
-  if (!camera) return h * 0.25;
-  const pixPerDeg = h / camera.fov;
-  return pixPerDeg * 20;
-}
-
 // ==========================================
 // イントロアニメーション
 // ==========================================
@@ -1297,26 +982,19 @@ function updatePositionsAndRender() {
   const w = overlayCanvas.width;
   const h = overlayCanvas.height;
 
-  // --- オーロラの出現・揺らめき更新 ---
-  const isPolar = Math.abs(latitude) >= 60;
-  const isNight = isForceNightMode || typeof sunAlt === 'undefined' || sunAlt < -12;
-  const isAuroraActive = showAurora && isPolar && isNight;
-
-  if (isAuroraActive) {
-    auroraOpacity += (1.0 - auroraOpacity) * 0.03; // 滑らかなフェードイン
-  } else {
-    auroraOpacity += (0.0 - auroraOpacity) * 0.05; // フェードアウト
-  }
-
-  if (auroraMaterial && auroraMesh) {
-    auroraMaterial.uniforms.uOpacity.value = auroraOpacity;
-    auroraMaterial.uniforms.uTime.value = performance.now() * 0.001;
-    auroraMaterial.uniforms.uKp.value = auroraKp;
-    auroraMesh.visible = auroraOpacity > 0.01;
-  }
-
   const jd = getJulianDate(currentDate);
   const lst = getLocalSiderealTime(jd, longitude);
+
+  // 太陽の高度（sunAlt）を計算
+  const sun = planetsData.find(p => p.name === 'Sun');
+  sunAlt = -20;
+  if (sun) {
+    const hor = equatorialToHorizontal(sun.ra, sun.dec, lst, latitude);
+    sunAlt = hor.alt;
+  }
+
+  // --- オーロラの出現・揺らめき更新 ---
+  updateAurora(performance.now(), latitude, sunAlt, isForceNightMode);
 
   // --- 日食・月食の判定 ---
   const sunData = planetsData.find(p => p.name === 'Sun');
@@ -1503,9 +1181,16 @@ function updatePositionsAndRender() {
 
   ctx2d.clearRect(0, 0, w, h);
 
-  drawLightPollution(w, h, lst);
-  drawClouds(w, h);
-  drawMoonMapOverlay(w, h);
+  drawLightPollution(
+    ctx2d, w, h, isForceNightMode,
+    isSolarEclipse, eclipseRatio, viewAzimuth,
+    camera, overlayCanvas, bortleScale, sunAlt
+  );
+  drawClouds(ctx2d, w, h, currentCloudCover, currentDate);
+  drawMoonMapOverlay(
+    ctx2d, w, h, showMoonMap, observationMode,
+    activeTrackPlanet, dsoPhotoObjects, camera
+  );
 
   if (showStarNames) {
     ctx2d.font = "11px 'Outfit', sans-serif";
@@ -1562,8 +1247,8 @@ function updatePositionsAndRender() {
   }
 
   updateDsoPhotos(lst);
-  updateMeteors(lst);
-  drawObservationMask(w, h);
+  updateMeteors(lst, latitude, currentDate, scene);
+  drawObservationMask(ctx2d, w, h, observationMode, camera);
 }
 
 // ==========================================
@@ -2271,212 +1956,6 @@ function drawAsterismGuide(lst: number) {
   }
 
   ctx2d.restore();
-}
-
-function drawObservationMask(w: number, h: number) {
-  if (observationMode === 'none') return;
-
-  const cx = w / 2;
-  const cy = h / 2;
-  const radius = Math.min(w, h) * 0.41;
-
-  ctx2d.save();
-
-  ctx2d.beginPath();
-  ctx2d.rect(0, 0, w, h);
-  ctx2d.arc(cx, cy, radius, 0, Math.PI * 2, true);
-  ctx2d.fillStyle = 'rgba(2, 3, 10, 0.98)';
-  ctx2d.fill();
-
-  const grad = ctx2d.createRadialGradient(cx, cy, radius - 20, cx, cy, radius + 2);
-  grad.addColorStop(0, 'rgba(2, 3, 10, 0)');
-  grad.addColorStop(0.5, 'rgba(2, 3, 10, 0.4)');
-  grad.addColorStop(1, 'rgba(2, 3, 10, 0.98)');
-  
-  ctx2d.beginPath();
-  ctx2d.arc(cx, cy, radius + 5, 0, Math.PI * 2);
-  ctx2d.fillStyle = grad;
-  ctx2d.fill();
-
-  ctx2d.strokeStyle = 'rgba(80, 100, 140, 0.25)';
-  ctx2d.lineWidth = 2.0;
-  ctx2d.beginPath();
-  ctx2d.arc(cx, cy, radius, 0, Math.PI * 2);
-  ctx2d.stroke();
-
-  if (observationMode === 'binoculars') {
-    ctx2d.font = "11px 'Courier New', monospace";
-    ctx2d.fillStyle = 'rgba(0, 188, 212, 0.6)';
-    ctx2d.textAlign = 'center';
-    ctx2d.textBaseline = 'bottom';
-    const tfov = camera.fov.toFixed(1);
-    ctx2d.fillText(`BINOCULARS 7x50 | TFOV: ${tfov}°`, cx, cy + radius - 15);
-  } else if (observationMode === 'telescope') {
-    ctx2d.strokeStyle = 'rgba(255, 71, 87, 0.35)';
-    ctx2d.lineWidth = 1.0;
-
-    const circles = [radius * 0.12, radius * 0.35, radius * 0.65];
-    circles.forEach(r => {
-      ctx2d.beginPath();
-      ctx2d.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx2d.stroke();
-    });
-
-    const innerGap = 8;
-    ctx2d.beginPath();
-    ctx2d.moveTo(cx - radius, cy);
-    ctx2d.lineTo(cx - innerGap, cy);
-    ctx2d.moveTo(cx + innerGap, cy);
-    ctx2d.lineTo(cx + radius, cy);
-    ctx2d.moveTo(cx, cy - radius);
-    ctx2d.lineTo(cx, cy - innerGap);
-    ctx2d.moveTo(cx, cy + innerGap);
-    ctx2d.lineTo(cx, cy + radius);
-    ctx2d.stroke();
-
-    const tickCount = 10;
-    const tickSpacing = radius / tickCount;
-    ctx2d.lineWidth = 0.8;
-    for (let i = 1; i < tickCount; i++) {
-      const dist = i * tickSpacing;
-      if (dist < innerGap) continue;
-      ctx2d.beginPath(); ctx2d.moveTo(cx - dist, cy - 3); ctx2d.lineTo(cx - dist, cy + 3); ctx2d.stroke();
-      ctx2d.beginPath(); ctx2d.moveTo(cx + dist, cy - 3); ctx2d.lineTo(cx + dist, cy + 3); ctx2d.stroke();
-      ctx2d.beginPath(); ctx2d.moveTo(cx - 3, cy - dist); ctx2d.lineTo(cx + 3, cy - dist); ctx2d.stroke();
-      ctx2d.beginPath(); ctx2d.moveTo(cx - 3, cy + dist); ctx2d.lineTo(cx + 3, cy + dist); ctx2d.stroke();
-    }
-
-    ctx2d.font = "11px 'Courier New', monospace";
-    ctx2d.fillStyle = 'rgba(255, 71, 87, 0.6)';
-    ctx2d.textAlign = 'center';
-    ctx2d.textBaseline = 'bottom';
-    const tfov = camera.fov.toFixed(2);
-    ctx2d.fillText(`TELESCOPE D200mm f1000mm | TFOV: ${tfov}° | RETICLE ON`, cx, cy + radius - 15);
-  }
-
-  ctx2d.restore();
-}
-
-// ==========================================
-// 流星群（Meteor Showers）制御
-// ==========================================
-
-function updateMeteors(lst: number) {
-  // 1. 流星群トグルがONの時、確率的に流星を生成
-  if (showMeteors) {
-    fetchMeteorShowersActivity();
-
-    const shower = METEOR_SHOWERS[activeMeteorShower];
-    if (shower) {
-      const activityData = currentMeteorShowersActivity.get(activeMeteorShower);
-      if (activityData && activityData.activity > 0) {
-        const hor = equatorialToHorizontal(shower.ra, shower.dec, lst, latitude);
-        
-        // 放射点（ラジアント）が地平線上にある時のみ流星が出現
-        if (hor.alt > 0) {
-          // 出現確率は活動係数 (0.0〜1.0) に比例して最大 4% まで変化
-          const spawnChance = 0.04 * activityData.activity;
-          if (Math.random() < spawnChance && activeMeteors.length < 30) {
-            createMeteor(hor.az, hor.alt, shower.color, activityData.activity);
-          }
-        }
-      }
-    }
-  }
-
-  // 2. 既存の流星の更新・移動
-  const nextMeteors: ActiveMeteor[] = [];
-  activeMeteors.forEach((m) => {
-    m.life += m.decay;
-    if (m.life >= 1.0) {
-      // 寿命が尽きたらシーンから削除してリソース破棄
-      scene.remove(m.line);
-      m.line.geometry.dispose();
-      (m.line.material as THREE.Material).dispose();
-    } else {
-      // 流れ星の先端 (pStart) と末端 (pEnd) の3D位置を計算
-      const progress = m.life * 1.8; // 移動スピードの加速感
-      const pStart = m.origin.clone().addScaledVector(m.dir, progress * m.speed * DOME_RADIUS * 0.5);
-      // ドームの球面に沿うように投影
-      pStart.normalize().multiplyScalar(DOME_RADIUS * 0.95);
-      
-      const pEnd = pStart.clone().addScaledVector(m.dir, -m.length * DOME_RADIUS * 0.25);
-      pEnd.normalize().multiplyScalar(DOME_RADIUS * 0.95);
-
-      const positions = m.line.geometry.attributes.position.array as Float32Array;
-      positions[0] = pStart.x;
-      positions[1] = pStart.y;
-      positions[2] = pStart.z;
-      positions[3] = pEnd.x;
-      positions[4] = pEnd.y;
-      positions[5] = pEnd.z;
-      m.line.geometry.attributes.position.needsUpdate = true;
-
-      // フェードアウト効果 (中央が一番明るく、両端が薄くなる)
-      const mat = m.line.material as THREE.LineBasicMaterial;
-      mat.opacity = Math.sin(m.life * Math.PI) * 0.9;
-
-      nextMeteors.push(m);
-    }
-  });
-  activeMeteors = nextMeteors;
-}
-
-function createMeteor(radAz: number, radAlt: number, colorStr: string, activity: number = 1.0) {
-  // 放射点の3D基準ベクトル (ドームの球面上)
-  const radVector = horizonToCartesian(radAz, radAlt, DOME_RADIUS * 0.95);
-  const radNormal = radVector.clone().normalize();
-  
-  // 流星の開始点（放射点の座標の周辺に少し揺らぎを与える）
-  const origin = radVector.clone();
-  const offset = new THREE.Vector3(
-    (Math.random() - 0.5) * 60,
-    (Math.random() - 0.5) * 60,
-    (Math.random() - 0.5) * 60
-  );
-  origin.add(offset).normalize().multiplyScalar(DOME_RADIUS * 0.95);
-
-  // 流星の進行方向 (放射ベクトルに直交する接線ベクトル)
-  const tangent = new THREE.Vector3(1, 0, 0);
-  if (Math.abs(radNormal.x) > 0.9) {
-    tangent.set(0, 1, 0);
-  }
-  const dir = new THREE.Vector3().crossVectors(radNormal, tangent).normalize();
-  
-  // 放射点からランダムな角度 (360度方向) に飛び散るように回転
-  const angle = Math.random() * Math.PI * 2;
-  dir.applyAxisAngle(radNormal, angle);
-
-  // 2頂点 (始点・終点) の Float32Array バッファを生成
-  const positions = new Float32Array(6);
-  positions[0] = origin.x; positions[1] = origin.y; positions[2] = origin.z;
-  positions[3] = origin.x; positions[4] = origin.y; positions[5] = origin.z;
-
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-
-  const mat = new THREE.LineBasicMaterial({
-    color: new THREE.Color(colorStr),
-    transparent: true,
-    opacity: 0.0,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    linewidth: 1.5
-  });
-
-  const line = new THREE.Line(geo, mat);
-  line.frustumCulled = false;
-  scene.add(line);
-
-  activeMeteors.push({
-    line,
-    origin,
-    dir,
-    speed: (0.08 + Math.random() * 0.12) * (0.8 + activity * 0.4),  // 毎フレームの移動量
-    length: (0.08 + Math.random() * 0.08) * (0.9 + activity * 0.2), // 尾の長さ割合
-    life: 0.0,
-    decay: 0.025 + Math.random() * 0.045 // 寿命減少スピード
-  });
 }
 
 function buildDsoPhotos() {
@@ -3339,16 +2818,11 @@ function initEvents() {
   
   if (toggleMeteorsCheckbox && meteorShowerSelect) {
     toggleMeteorsCheckbox.addEventListener('change', () => {
-      showMeteors = toggleMeteorsCheckbox.checked;
-      if (showMeteors) {
+      effectsState.showMeteors = toggleMeteorsCheckbox.checked;
+      if (effectsState.showMeteors) {
         // 既存の流星をクリア
-        activeMeteors.forEach(m => {
-          scene.remove(m.line);
-          m.line.geometry.dispose();
-          (m.line.material as THREE.Material).dispose();
-        });
-        activeMeteors = [];
-        const showerName = METEOR_SHOWERS[activeMeteorShower]?.name || '流星群';
+        clearMeteors(scene);
+        const showerName = METEOR_SHOWERS[effectsState.activeMeteorShower]?.name || '流星群';
         showToast(`${showerName} を表示します`, 'info');
       } else {
         showToast('流星群を非表示にしました', 'info');
@@ -3356,9 +2830,9 @@ function initEvents() {
     });
 
     meteorShowerSelect.addEventListener('change', () => {
-      activeMeteorShower = meteorShowerSelect.value;
-      if (showMeteors) {
-        const showerName = METEOR_SHOWERS[activeMeteorShower]?.name || '流星群';
+      effectsState.activeMeteorShower = meteorShowerSelect.value;
+      if (effectsState.showMeteors) {
+        const showerName = METEOR_SHOWERS[effectsState.activeMeteorShower]?.name || '流星群';
         showToast(`流星群を ${showerName} に切り替えました`, 'info');
       }
     });
@@ -3721,18 +3195,6 @@ function initEnhancedEvents() {
     });
   }
 
-  const toggleMeteors = document.getElementById('toggle-meteors') as HTMLInputElement;
-  if (toggleMeteors) {
-    toggleMeteors.addEventListener('change', (e) => {
-      showMeteors = (e.target as HTMLInputElement).checked;
-    });
-  }
-  const meteorShowerSelect = document.getElementById('meteor-shower-select') as HTMLSelectElement;
-  if (meteorShowerSelect) {
-    meteorShowerSelect.addEventListener('change', (e) => {
-      activeMeteorShower = (e.target as HTMLSelectElement).value;
-    });
-  }
 }
 
 // ==========================================
@@ -3777,46 +3239,6 @@ function updateLightPollutionFog() {
   renderer.setClearColor(finalColor, 1.0);
 }
 
-// 流星群アクティビティ管理
-interface MeteorShowerActivity {
-  id: string;
-  activity: number;
-  zhr: number;
-}
-let currentMeteorShowersActivity: Map<string, MeteorShowerActivity> = new Map();
-let lastMeteorFetchDateStr = '';
-let isFetchingMeteors = false;
-
-async function fetchMeteorShowersActivity() {
-  if (isFetchingMeteors) return;
-  const dateStr = currentDate.toISOString().split('T')[0];
-  if (dateStr === lastMeteorFetchDateStr) return;
-  
-  isFetchingMeteors = true;
-  try {
-    const url = `${API_BASE}/api/meteor-showers?time=${encodeURIComponent(currentDate.toISOString())}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error('API error');
-    const data = await res.json() as { showers: Array<{ id: string; activity: number; zhr: number }> };
-    
-    currentMeteorShowersActivity.clear();
-    data.showers.forEach(s => {
-      currentMeteorShowersActivity.set(s.id, {
-        id: s.id,
-        activity: s.activity,
-        zhr: s.zhr
-      });
-    });
-    lastMeteorFetchDateStr = dateStr;
-    console.log('Fetched meteor activity for date:', dateStr, data.showers);
-  } catch (err) {
-    console.error('Failed to fetch meteor showers activity:', err);
-  } finally {
-    isFetchingMeteors = false;
-  }
-}
-
-// 天体写真撮影
 function updateAstrophotographyPanelVisibility() {
   const panel = document.getElementById('astrophotography-panel');
   if (!panel) return;
@@ -4160,7 +3582,7 @@ function checkAchievements(logData: any) {
   if (!currentBadges.has('aurora-expedition')) {
     const isPolar = Math.abs(latitude) >= 60;
     const isNight = isForceNightMode || typeof sunAlt === 'undefined' || sunAlt < -12;
-    if (showAurora && isPolar && isNight) {
+    if (effectsState.showAurora && isPolar && isNight) {
       newBadges.push('aurora-expedition');
       showToast('🏆 実績達成: Aurora Expedition (極地でオーロラを観測した！)', 'info');
     }
@@ -4343,8 +3765,8 @@ function initEnhancedFeaturesV2() {
 
   if (toggleAurora) {
     toggleAurora.addEventListener('change', () => {
-      showAurora = toggleAurora.checked;
-      if (showAurora) {
+      effectsState.showAurora = toggleAurora.checked;
+      if (effectsState.showAurora) {
         const isPolar = Math.abs(latitude) >= 60;
         const isNight = isForceNightMode || typeof sunAlt === 'undefined' || sunAlt < -12;
         if (!isPolar) {
@@ -4360,8 +3782,8 @@ function initEnhancedFeaturesV2() {
 
   if (auroraKpSlider && auroraKpVal) {
     auroraKpSlider.addEventListener('input', () => {
-      auroraKp = parseInt(auroraKpSlider.value);
-      auroraKpVal.textContent = String(auroraKp);
+      effectsState.auroraKp = parseInt(auroraKpSlider.value);
+      auroraKpVal.textContent = String(effectsState.auroraKp);
     });
   }
 
@@ -4470,6 +3892,262 @@ function tick() {
 }
 
 // ==========================================
+// 今夜の星空プランナー 機能
+// ==========================================
+
+async function fetchSkyTonight(): Promise<void> {
+  try {
+    const timeStr = encodeURIComponent(currentDate.toISOString());
+    const res = await fetch(`${API_BASE}/api/sky-tonight?lat=${latitude}&lng=${longitude}&time=${timeStr}`);
+    if (!res.ok) throw new Error(`sky-tonight API: ${res.status}`);
+    skyTonightData = await res.json();
+    renderSkyTonightPanel();
+  } catch (e) {
+    console.warn('今夜の星空プランナー: データ取得失敗', e);
+  }
+}
+
+function renderSkyTonightPanel(): void {
+  const data = skyTonightData;
+  if (!data) return;
+
+  const moonPhaseEl = document.getElementById('skt-moon-phase');
+  const moonIllumEl = document.getElementById('skt-moon-illumination');
+  const moonImpactEl = document.getElementById('skt-moon-impact');
+  const seeingTipEl = document.getElementById('skt-seeing-tip');
+
+  if (moonPhaseEl) moonPhaseEl.textContent = `月齢 ${data.moon_phase.toFixed(1)} 日`;
+  if (moonIllumEl) moonIllumEl.textContent = `輝面比 ${Math.round(data.moon_illumination * 100)}%`;
+  if (moonImpactEl) {
+    const impactMap: Record<string, { label: string; color: string }> = {
+      '低': { label: '低 (観察良好)', color: '#4caf50' },
+      '中': { label: '中 (影響あり)', color: '#ff9800' },
+      '高': { label: '高 (観察困難)', color: '#f44336' },
+    };
+    const imp = impactMap[data.moon_impact] || { label: data.moon_impact, color: '#aaa' };
+    moonImpactEl.textContent = `月明かり影響: ${imp.label}`;
+    moonImpactEl.style.color = imp.color;
+  }
+  if (seeingTipEl) seeingTipEl.textContent = data.seeing_tip;
+
+  const listEl = document.getElementById('sky-tonight-list');
+  if (!listEl) return;
+  listEl.replaceChildren();
+
+  if (data.items.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'color:var(--text-muted);font-size:0.85rem;text-align:center;padding:30px 0;';
+    empty.textContent = '現在時刻は目立つ天体が見つかりません。時間や場所を変えてお試しください。';
+    listEl.appendChild(empty);
+    return;
+  }
+
+  const difficultyStyle: Record<string, { bg: string; text: string; border: string }> = {
+    '初心者': { bg: 'rgba(76,175,80,0.15)',  text: '#81c784', border: 'rgba(76,175,80,0.4)' },
+    '中級':   { bg: 'rgba(255,152,0,0.15)', text: '#ffb74d', border: 'rgba(255,152,0,0.4)' },
+    '上級':   { bg: 'rgba(244,67,54,0.15)',  text: '#ef9a9a', border: 'rgba(244,67,54,0.4)' },
+  };
+  const categoryIcon: Record<string, string> = { planet: '🪐', dso: '🌌', star: '⭐' };
+
+  data.items.forEach((item: SkyTonightItem, idx: number) => {
+    const card = document.createElement('div');
+    card.id = `skt-card-${idx}`;
+    card.style.cssText = [
+      'display:grid',
+      'grid-template-columns:auto 1fr auto',
+      'gap:10px',
+      'align-items:start',
+      'background:rgba(255,255,255,0.04)',
+      'border:1px solid rgba(255,255,255,0.08)',
+      'border-radius:12px',
+      'padding:12px 14px',
+      'margin-bottom:10px',
+      'transition:background 0.2s,border-color 0.2s',
+    ].join(';');
+    card.onmouseover = () => { card.style.background = 'rgba(255,255,255,0.08)'; card.style.borderColor = `${item.color}55`; };
+    card.onmouseout  = () => { card.style.background = 'rgba(255,255,255,0.04)'; card.style.borderColor = 'rgba(255,255,255,0.08)'; };
+
+    // 左列: ランク + アイコン
+    const rankEl = document.createElement('div');
+    rankEl.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:4px;min-width:36px;';
+    const rankNum = document.createElement('div');
+    rankNum.style.cssText = `font-size:1.05rem;font-weight:bold;color:${idx===0?'#ffd700':idx===1?'#c0c0c0':idx===2?'#cd7f32':'var(--text-muted)'};`;
+    rankNum.textContent = `#${idx+1}`;
+    const iconEl = document.createElement('div');
+    iconEl.style.cssText = 'font-size:1.4rem;line-height:1;';
+    iconEl.textContent = categoryIcon[item.category] || '⭐';
+    rankEl.appendChild(rankNum);
+    rankEl.appendChild(iconEl);
+
+    // 中列: 情報
+    const infoEl = document.createElement('div');
+    infoEl.style.cssText = 'display:flex;flex-direction:column;gap:5px;min-width:0;';
+
+    const nameRow = document.createElement('div');
+    nameRow.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;';
+    const nameJaEl = document.createElement('span');
+    nameJaEl.style.cssText = 'font-weight:bold;font-size:0.95rem;color:var(--text-primary);';
+    nameJaEl.textContent = item.name_ja;
+    const typeEl = document.createElement('span');
+    typeEl.style.cssText = 'font-size:0.68rem;color:var(--text-muted);background:rgba(255,255,255,0.07);padding:1px 6px;border-radius:10px;';
+    typeEl.textContent = item.type_label;
+    const ds = difficultyStyle[item.difficulty] || difficultyStyle['中級'];
+    const diffEl = document.createElement('span');
+    diffEl.style.cssText = `font-size:0.65rem;padding:1px 8px;border-radius:10px;background:${ds.bg};color:${ds.text};border:1px solid ${ds.border};`;
+    diffEl.textContent = item.difficulty;
+    nameRow.appendChild(nameJaEl);
+    nameRow.appendChild(typeEl);
+    nameRow.appendChild(diffEl);
+
+    const statsRow = document.createElement('div');
+    statsRow.style.cssText = 'font-size:0.7rem;color:var(--text-secondary);display:flex;gap:10px;flex-wrap:wrap;';
+    const makeStat = (label: string, val: string) => {
+      const s = document.createElement('span');
+      s.innerHTML = `<span style="color:var(--text-muted)">${label}</span> <strong style="color:var(--text-primary)">${val}</strong>`;
+      return s;
+    };
+    statsRow.appendChild(makeStat('高度', `${item.alt.toFixed(0)}°`));
+    statsRow.appendChild(makeStat('等級', `${item.mag.toFixed(1)}等`));
+    if (item.visible_hours > 0) statsRow.appendChild(makeStat('観察可能', item.time_range));
+
+    const descEl = document.createElement('div');
+    descEl.style.cssText = 'font-size:0.72rem;color:var(--text-muted);line-height:1.5;';
+    descEl.textContent = item.description;
+
+    infoEl.appendChild(nameRow);
+    infoEl.appendChild(statsRow);
+    infoEl.appendChild(descEl);
+
+    // 右列: 追跡ボタン + スコアバー
+    const trackDiv = document.createElement('div');
+    trackDiv.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:6px;';
+    const trackBtn = document.createElement('button');
+    trackBtn.id = `skt-track-btn-${idx}`;
+    trackBtn.style.cssText = [
+      'background:rgba(0,188,212,0.15)',
+      'border:1px solid rgba(0,188,212,0.4)',
+      'color:#00bcd4',
+      'font-size:0.68rem',
+      'padding:4px 10px',
+      'border-radius:8px',
+      'cursor:pointer',
+      'white-space:nowrap',
+      'transition:background 0.15s',
+    ].join(';');
+    trackBtn.textContent = '👁 追跡';
+    trackBtn.onmouseover = () => trackBtn.style.background = 'rgba(0,188,212,0.3)';
+    trackBtn.onmouseout  = () => trackBtn.style.background = 'rgba(0,188,212,0.15)';
+    trackBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      focusOnObject(item.az, item.alt);
+      if (item.category === 'planet') {
+        activeTrackPlanet = item.name;
+        isPlanetLockOn = true;
+        guideTarget = { az: item.az, alt: item.alt };
+        isAutoRotatingToGuide = true;
+        const lockCb = document.getElementById('toggle-planet-lock') as HTMLInputElement;
+        if (lockCb) lockCb.checked = true;
+      } else {
+        guideTarget = { az: item.az, alt: item.alt };
+        isAutoRotatingToGuide = true;
+      }
+      showToast(`${item.name_ja} に視点を移動します`, 'info');
+      const modal = document.getElementById('sky-tonight-modal');
+      if (modal) modal.style.display = 'none';
+    });
+
+    const maxScore = data.items[0]?.score || 1;
+    const pct = Math.round((item.score / maxScore) * 100);
+    const barOuter = document.createElement('div');
+    barOuter.style.cssText = 'width:36px;height:4px;background:rgba(255,255,255,0.1);border-radius:2px;overflow:hidden;';
+    const barInner = document.createElement('div');
+    barInner.style.cssText = `height:100%;width:${pct}%;background:${item.color};border-radius:2px;`;
+    barOuter.appendChild(barInner);
+    const scoreLabel = document.createElement('div');
+    scoreLabel.style.cssText = 'font-size:0.58rem;color:var(--text-muted);text-align:center;margin-top:2px;';
+    scoreLabel.textContent = `${item.score.toFixed(0)}pt`;
+    trackDiv.appendChild(trackBtn);
+    trackDiv.appendChild(barOuter);
+    trackDiv.appendChild(scoreLabel);
+
+    card.appendChild(rankEl);
+    card.appendChild(infoEl);
+    card.appendChild(trackDiv);
+    listEl.appendChild(card);
+  });
+}
+
+function initSkyTonightUI(): void {
+  const modal = document.createElement('div');
+  modal.id = 'sky-tonight-modal';
+  modal.style.cssText = [
+    'display:none',
+    'position:fixed',
+    'inset:0',
+    'background:rgba(0,0,0,0.75)',
+    'z-index:9500',
+    'justify-content:center',
+    'align-items:center',
+    'backdrop-filter:blur(4px)',
+  ].join(';');
+
+  const panel = document.createElement('div');
+  panel.style.cssText = [
+    'background:linear-gradient(135deg, #0d1b2a 0%, #1a2744 100%)',
+    'border:1px solid rgba(0,188,212,0.25)',
+    'border-radius:18px',
+    'padding:24px',
+    'width:min(640px,95vw)',
+    'max-height:85vh',
+    'overflow-y:auto',
+    'box-shadow:0 0 40px rgba(0,188,212,0.15)',
+    'scrollbar-width:thin',
+    'scrollbar-color:rgba(0,188,212,0.3) transparent',
+  ].join(';');
+
+  panel.innerHTML = [
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">',
+    '  <div>',
+    '    <div style="font-size:1.2rem;font-weight:bold;color:#e8f5e9;">🌠 今夜の星空プランナー</div>',
+    '    <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px;">現在位置・日時に基づく観察おすすめトップ5天体</div>',
+    '  </div>',
+    '  <button id="btn-close-sky-tonight" style="background:none;border:1px solid rgba(255,255,255,0.2);color:rgba(255,255,255,0.7);font-size:1.1rem;width:32px;height:32px;border-radius:50%;cursor:pointer;">&times;</button>',
+    '</div>',
+    '<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:12px 16px;margin-bottom:14px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">',
+    '  <div style="text-align:center;"><div style="font-size:0.62rem;color:var(--text-muted);">🌙 月齢</div><div id="skt-moon-phase" style="font-size:0.88rem;font-weight:bold;color:var(--text-primary);">--</div></div>',
+    '  <div style="text-align:center;border-left:1px solid rgba(255,255,255,0.08);border-right:1px solid rgba(255,255,255,0.08);"><div style="font-size:0.62rem;color:var(--text-muted);">&#9728; 輝面比</div><div id="skt-moon-illumination" style="font-size:0.88rem;font-weight:bold;color:var(--text-primary);">--</div></div>',
+    '  <div style="text-align:center;"><div style="font-size:0.62rem;color:var(--text-muted);">&#9889; 影響度</div><div id="skt-moon-impact" style="font-size:0.88rem;font-weight:bold;">--</div></div>',
+    '</div>',
+    '<div id="skt-seeing-tip" style="font-size:0.76rem;color:#b0bec5;background:rgba(0,188,212,0.06);border-left:3px solid rgba(0,188,212,0.5);padding:10px 14px;border-radius:6px;margin-bottom:14px;line-height:1.6;">--</div>',
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">',
+    '  <div style="font-size:0.78rem;font-weight:bold;color:var(--text-secondary);">★ おすすめランキング</div>',
+    '  <button id="btn-skt-refresh" style="font-size:0.68rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:var(--text-muted);padding:3px 10px;border-radius:8px;cursor:pointer;">🔄 更新</button>',
+    '</div>',
+    '<div id="sky-tonight-list"></div>',
+  ].join('');
+
+  modal.appendChild(panel);
+  document.body.appendChild(modal);
+
+  document.getElementById('btn-close-sky-tonight')?.addEventListener('click', () => { modal.style.display = 'none'; });
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.style.display = 'none'; });
+
+  document.getElementById('btn-skt-refresh')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-skt-refresh');
+    if (btn) btn.textContent = '取得中...';
+    await fetchSkyTonight();
+    if (btn) btn.textContent = '🔄 更新';
+  });
+
+  // サイドパネルの「今夜の星空プランナー」ボタンにイベントを登録
+  document.getElementById('btn-open-sky-tonight')?.addEventListener('click', async () => {
+    modal.style.display = 'flex';
+    if (!skyTonightData) await fetchSkyTonight();
+    else renderSkyTonightPanel();
+  });
+}
+
+// ==========================================
 // 起動
 // ==========================================
 
@@ -4483,11 +4161,14 @@ async function start() {
   initAstrophotography();
   updateLightPollutionFog();
   initEnhancedFeaturesV2();
+  initSkyTonightUI();
   fetchWeather();
   await loadFromAPI();
+  fetchSkyTonight();
   if (Object.keys(constellationMeta).length > 0) {
     populateConstellationSelect(constellationMeta);
   }
+
   showToast(`Stellaris 起動完了 - ${starsData.length}星 / 88星座 / 惑星${planetsData.length}`, 'info');
   introStartTime = performance.now();
   

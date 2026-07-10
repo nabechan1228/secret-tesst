@@ -198,6 +198,31 @@ class WeatherResponse(BaseModel):
     wind_speed: float
     cloud_cover: float
 
+class SkyTonightItem(BaseModel):
+    name: str
+    name_ja: str
+    category: str          # 'planet' | 'dso' | 'star'
+    type_label: str        # 例: '惑星', '球状星団', '1等星'
+    difficulty: str        # '初心者' | '中級' | '上級'
+    score: float
+    mag: float
+    alt: float
+    az: float
+    ra: float
+    dec: float
+    visible_hours: int
+    time_range: str
+    description: str
+    color: str
+
+class SkyTonightResponse(BaseModel):
+    datetime: str
+    items: List[SkyTonightItem]
+    moon_phase: float          # 月齢 (0-29.5)
+    moon_illumination: float   # 輝面比 (0.0-1.0)
+    moon_impact: str           # '低' | '中' | '高'
+    seeing_tip: str            # 総括コメント
+
 
 # ==========================================
 # 天体計算アルゴリズム (Python実装)
@@ -510,6 +535,256 @@ def get_planet_recommendation(
 
 
 # ==========================================
+# 今夜の星空プランナー ロジック
+# ==========================================
+
+def calc_moon_phase(jd: float) -> tuple[float, float]:
+    """
+    ユリウス日から月齢と輝面比を計算する（簡易計算）。
+    Returns: (moon_age_days: float, illumination: float)
+    """
+    # 既知の朔の日 (2000-01-06 18:14 UTC, JD=2451551.26)
+    known_new_moon_jd = 2451551.26
+    synodic_period = 29.53058867  # 朔望月 (日)
+    moon_age = (jd - known_new_moon_jd) % synodic_period
+    if moon_age < 0:
+        moon_age += synodic_period
+    # 輝面比の概算 (cos近似)
+    illumination = (1.0 - math.cos(2.0 * math.pi * moon_age / synodic_period)) / 2.0
+    return round(moon_age, 1), round(illumination, 3)
+
+
+def get_sky_tonight(
+    dt_utc: datetime,
+    lat: float,
+    lng: float,
+    jd: float,
+    lst: float,
+) -> dict:
+    """
+    今夜の観察おすすめ天体トップ5を計算して返す。
+    対象: 惑星・メシエDSO・明るい恒星
+    """
+    moon_age, moon_illumination = calc_moon_phase(jd)
+
+    # 月の輝面比に基づく影響レベル
+    if moon_illumination < 0.25:
+        moon_impact = '低'
+    elif moon_illumination < 0.6:
+        moon_impact = '中'
+    else:
+        moon_impact = '高'
+
+    local_offset = lng / 15.0
+    local_dt = dt_utc + timedelta(hours=local_offset)
+    local_date = local_dt.date()
+
+    # 今夜17時〜翌6時の14時間を1時間刻みでサンプリング
+    sampling_times = []
+    base_dt = datetime(local_date.year, local_date.month, local_date.day, 17, 0, 0, tzinfo=timezone.utc)
+    for i in range(14):
+        lp = base_dt + timedelta(hours=i)
+        utc_p = lp - timedelta(hours=local_offset)
+        sampling_times.append((lp.strftime("%H:%M"), utc_p))
+
+    candidates = []
+
+    # --- 1. 惑星 ---
+    planet_names = ["Mercury", "Venus", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune"]
+    planet_stats: dict = {p: {
+        "visible_hours": 0, "max_alt": -90.0,
+        "mag_sum": 0.0, "count": 0,
+        "color": "", "name_ja": "",
+        "ra": 0.0, "dec": 0.0, "az": 0.0, "alt": -90.0,
+        "visible_start": None, "visible_end": None
+    } for p in planet_names}
+
+    for label, utc_p in sampling_times:
+        jd_p = get_julian_date(utc_p)
+        lst_p = get_local_sidereal_time(jd_p, lng)
+        positions = get_planet_positions(jd_p, lat, lng, equatorial_to_horizontal, lst_p)
+        sun_pos = next((p for p in positions if p["name"] == "Sun"), None)
+        if not sun_pos or sun_pos["alt"] >= -6.0:
+            continue  # 薄明終了前はスキップ
+
+        for pos in positions:
+            pname = pos["name"]
+            if pname == "Sun" or pname == "Moon" or pname not in planet_stats:
+                continue
+            alt = pos["alt"]
+            if alt >= 10.0:
+                st = planet_stats[pname]
+                st["visible_hours"] += 1
+                st["mag_sum"] += pos["mag"]
+                st["count"] += 1
+                if alt > st["max_alt"]:
+                    st["max_alt"] = alt
+                    st["ra"] = pos["ra"]
+                    st["dec"] = pos["dec"]
+                    st["az"] = pos["az"]
+                    st["alt"] = alt
+                st["color"] = pos["color"]
+                st["name_ja"] = pos["name_ja"]
+                if st["visible_start"] is None:
+                    st["visible_start"] = label
+                st["visible_end"] = label
+
+    planet_type_map = {
+        "Mercury": "内惑星", "Venus": "内惑星",
+        "Mars": "外惑星", "Jupiter": "外惑星",
+        "Saturn": "外惑星", "Uranus": "外惑星", "Neptune": "外惑星"
+    }
+    planet_desc_map = {
+        "Mercury": "西または東の低空に輝く銀白色の惑星。太陽に近く観測困難だが、見られたときは貴重。",
+        "Venus": "夜明けまたは宵の明星。圧倒的な輝きを放つ最明惑星。満ち欠けが双眼鏡で確認できる。",
+        "Mars": "赤く輝く戦いの惑星。望遠鏡では極冠や模様が見える。2年ごとに接近する。",
+        "Jupiter": "太陽系最大の惑星。望遠鏡で縞模様と4つのガリレオ衛星が見える。",
+        "Saturn": "美しいリングで有名。望遠鏡でカッシーニの間隙も見える惑星。",
+        "Uranus": "青緑色に輝く氷惑星。肉眼ギリギリの明るさだが双眼鏡で確認可能。",
+        "Neptune": "太陽系最遠の惑星。双眼鏡・望遠鏡が必要な挑戦的な観察対象。"
+    }
+
+    for pname, st in planet_stats.items():
+        if st["visible_hours"] == 0:
+            continue
+        avg_mag = st["mag_sum"] / st["count"]
+        # スコア計算（高度重視・明るさ重視）
+        score = st["max_alt"] * 0.8 + (-avg_mag) * 10
+        difficulty = "初心者" if avg_mag < 2.0 else ("中級" if avg_mag < 5.0 else "上級")
+        time_range = f"{st['visible_start']}～{st['visible_end']}" if st["visible_hours"] > 0 else "観察不可"
+        candidates.append({
+            "name": pname,
+            "name_ja": st["name_ja"],
+            "category": "planet",
+            "type_label": planet_type_map.get(pname, "惑星"),
+            "difficulty": difficulty,
+            "score": round(score, 1),
+            "mag": round(avg_mag, 1),
+            "alt": round(st["max_alt"], 1),
+            "az": round(st["az"], 1),
+            "ra": round(st["ra"], 4),
+            "dec": round(st["dec"], 4),
+            "visible_hours": st["visible_hours"],
+            "time_range": time_range,
+            "description": planet_desc_map.get(pname, f"{st['name_ja']}が見頃です。"),
+            "color": st["color"],
+        })
+
+    # --- 2. メシエ天体 DSO ---
+    dso_type_ja = {
+        "galaxy": "銀河", "open cluster": "散開星団",
+        "globular cluster": "球状星団", "nebula": "星雲",
+        "planetary nebula": "惑星状星雲", "supernova remnant": "超新星残骸",
+        "asterism": "星官"
+    }
+
+    if MESSIER_OBJECTS:
+        ra_arr = np.array([o["ra"] for o in MESSIER_OBJECTS], dtype=np.float64)
+        dec_arr = np.array([o["dec"] for o in MESSIER_OBJECTS], dtype=np.float64)
+        az_arr, alt_arr = equatorial_to_horizontal_numpy(ra_arr, dec_arr, lst, lat)
+
+        for i, obj in enumerate(MESSIER_OBJECTS):
+            alt_val = alt_arr[i]
+            if alt_val < 15.0:
+                continue  # 低空すぎる天体は除外
+            mag = obj["mag"]
+            # DSO は月明かりの影響を受けやすい
+            moon_penalty = moon_illumination * 15.0  # 満月付近で最大15点減点
+            score = alt_val * 0.8 + (-mag) * 10 - moon_penalty
+            if mag < 5.0:
+                difficulty = "初心者"
+            elif mag < 7.0:
+                difficulty = "中級"
+            else:
+                difficulty = "上級"
+
+            type_en = obj.get("type", "")
+            type_ja = dso_type_ja.get(type_en, type_en)
+            name_ja = obj["name_ja"]
+            name_en = obj["name_en"]
+            desc = f"{name_ja}（{type_ja}）。高度{alt_val:.0f}°、{mag}等級。{obj.get('id', '')}とも呼ばれます。"
+
+            candidates.append({
+                "name": obj["id"],
+                "name_ja": name_ja,
+                "category": "dso",
+                "type_label": type_ja,
+                "difficulty": difficulty,
+                "score": round(score, 1),
+                "mag": mag,
+                "alt": round(alt_val, 1),
+                "az": round(az_arr[i], 1),
+                "ra": obj["ra"],
+                "dec": obj["dec"],
+                "visible_hours": 0,
+                "time_range": "-",
+                "description": desc,
+                "color": "#b0e0ff",
+            })
+
+    # --- 3. 明るい恒星 ---
+    stars_raw = get_stars()
+    bright_stars = [s for s in stars_raw if s["m"] <= 1.5 and s["h"] in BRIGHT_STAR_NAMES]
+    if bright_stars:
+        ra_arr_s = np.array([s["r"] for s in bright_stars], dtype=np.float64)
+        dec_arr_s = np.array([s["d"] for s in bright_stars], dtype=np.float64)
+        az_arr_s, alt_arr_s = equatorial_to_horizontal_numpy(ra_arr_s, dec_arr_s, lst, lat)
+
+        for i, star in enumerate(bright_stars):
+            alt_val = alt_arr_s[i]
+            if alt_val < 20.0:
+                continue  # 高度20度未満の恒星は除外
+            mag = star["m"]
+            score = alt_val * 0.5 + (-mag) * 12
+            name_ja = BRIGHT_STAR_NAMES.get(star["h"], f"HIP{star['h']}")
+
+            # bv_to_colorはmain.pyに既にある
+            color = bv_to_color(star.get("b", 0.6))
+            desc = f"{name_ja}（1等星・恒星）。高度{alt_val:.0f}°、{mag:.1f}等。肉眼で容易に確認できる明るい星。"
+
+            candidates.append({
+                "name": f"HIP{star['h']}",
+                "name_ja": name_ja,
+                "category": "star",
+                "type_label": "1等星",
+                "difficulty": "初心者",
+                "score": round(score, 1),
+                "mag": round(mag, 1),
+                "alt": round(alt_val, 1),
+                "az": round(az_arr_s[i], 1),
+                "ra": round(star["r"], 4),
+                "dec": round(star["d"], 4),
+                "visible_hours": 0,
+                "time_range": "-",
+                "description": desc,
+                "color": color,
+            })
+
+    # スコア降順でソートしてトップ5
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    top5 = candidates[:5]
+
+    # 総括コメント生成
+    if moon_illumination < 0.15:
+        seeing_tip = "今夜は新月に近く、月明かりの影響が少ない絶好の観測チャンスです！暗い星雲・銀河の観察に最適です。"
+    elif moon_illumination < 0.4:
+        seeing_tip = "月明かりはやや控えめです。明るい惑星や星団は問題なく楽しめます。"
+    elif moon_illumination < 0.7:
+        seeing_tip = "月が半分以上輝いています。明るい惑星・1等星の観察に集中しましょう。"
+    else:
+        seeing_tip = "今夜は月が明るいため、暗い天体の観察には不向きです。惑星や明るい星の観察にとどめましょう。"
+
+    return {
+        "datetime": dt_utc.isoformat(),
+        "items": top5,
+        "moon_phase": moon_age,
+        "moon_illumination": moon_illumination,
+        "moon_impact": moon_impact,
+        "seeing_tip": seeing_tip,
+    }
+
+
+# ==========================================
 # API エンドポイント
 # ==========================================
 
@@ -788,26 +1063,44 @@ def get_weather(
     lng: float = Query(139.76, ge=-180.0, le=180.0, description="観測経度 (度, -180 ~ 180)")
 ):
     """
-    指定された座標の現在天気を Open-Meteo API からプロキシして取得する。
+    指定された座標の現在天気を wttr.in API からプロキシして取得する。
     """
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lng}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,cloud_cover"
+    url = f"https://wttr.in/{lat},{lng}?format=j1"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Stellaris-Planetarium"})
         with urllib.request.urlopen(req, timeout=5) as response:
             data = json.loads(response.read().decode("utf-8"))
-            current = data.get("current", {})
+            current = data.get("current_condition", [{}])[0]
             return {
-                "temperature": float(current.get("temperature_2m", 15.0)),
-                "humidity": float(current.get("relative_humidity_2m", 50.0)),
-                "wind_speed": float(current.get("wind_speed_10m", 0.0)),
-                "cloud_cover": float(current.get("cloud_cover", 0.0)),
+                "temperature": float(current.get("temp_C", 15.0)),
+                "humidity": float(current.get("humidity", 50.0)),
+                "wind_speed": float(current.get("windspeedKmph", 0.0)),
+                "cloud_cover": float(current.get("cloudcover", 0.0)),
             }
     except Exception as e:
-        logger.error("天気APIの取得に失敗: %s", e)
-        raise HTTPException(
-            status_code=503,
-            detail="天気データを取得できませんでした。しばらく待ってから再試行してください。",
-        )
+        logger.warning("天気APIの取得に失敗したため、デフォルト値を返します: %s", e)
+        return {
+            "temperature": 15.0,
+            "humidity": 50.0,
+            "wind_speed": 3.0,
+            "cloud_cover": 10.0,
+        }
+
+@app.get("/api/sky-tonight", response_model=SkyTonightResponse)
+def get_sky_tonight_endpoint(
+    lat: float = Query(35.68, ge=-90.0, le=90.0, description="観測緯度 (度)"),
+    lng: float = Query(139.76, ge=-180.0, le=180.0, description="観測経度 (度)"),
+    time: Optional[str] = Query(None, max_length=64, description="ISO 8601 日時文字列。省略時は現在のUTC時刻"),
+):
+    """
+    今夜の観察おすすめ天体トップ5を返す。
+    惑星・メシエ天体・明るい恒星を高度・明るさ・月明かり影響でスコアリング。
+    """
+    logger.info("GET /api/sky-tonight lat=%.2f lng=%.2f time=%s", lat, lng, time)
+    dt_utc, jd, lst = parse_time_and_calc_lst(time, lng)
+    result = get_sky_tonight(dt_utc, lat, lng, jd, lst)
+    return result
+
 
 @app.get("/health", response_model=HealthResponse)
 def health():
