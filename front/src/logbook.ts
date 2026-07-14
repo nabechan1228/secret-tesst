@@ -45,7 +45,7 @@ export function loadLogData(): LogData {
       for (const item of raw.observations) {
         if (!item || typeof item !== 'object') continue;
         const id = sanitizeString(item.id, 32);
-        if (!id || !resolveDsoAsset(id)) continue;
+        if (!id || (!id.startsWith('HIP') && !resolveDsoAsset(id))) continue;
 
         observations.push({
           id,

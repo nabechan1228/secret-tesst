@@ -171,6 +171,20 @@ let lunarEclipsePhase = 0.0;   // 月食の進行位相 (0→1)
 // 現在選択中の天体イベント
 let activeCelestialEventKey: string | null = null;
 
+// 観測ログ追加済みの天体キャッシュ（毎フレームのlocalStorage読み込み防止用）
+const loggedObjects = new Set<string>();
+
+function initLoggedObjects() {
+  const logData = loadLogData();
+  if (logData && Array.isArray(logData.observations)) {
+    logData.observations.forEach(o => {
+      if (!o.isPhoto) {
+        loggedObjects.add(o.id);
+      }
+    });
+  }
+}
+
 // ==========================================
 // 今夜の星空プランナー 型定義
 // ==========================================
@@ -1110,8 +1124,9 @@ function updatePositionsAndRender() {
     viewAzimuth = (viewAzimuth + diffAz * 0.05 + 360) % 360;
     viewAltitude = viewAltitude + diffAlt * 0.05;
 
-    if (!isPlanetLockOn && Math.abs(diffAz) < 0.1 && Math.abs(diffAlt) < 0.1) {
+    if (Math.abs(diffAz) < 0.1 && Math.abs(diffAlt) < 0.1) {
       isAutoRotatingToGuide = false;
+      guideTarget = null;
     }
   } else if (isPlanetLockOn && activeTrackPlanet) {
     let targetAz: number | null = null;
@@ -1129,11 +1144,21 @@ function updatePositionsAndRender() {
         targetAz = hor.az;
         targetAlt = hor.alt;
       } else {
-        const fixedCoord = DSO_FIXED_COORDS[activeTrackPlanet];
-        if (fixedCoord) {
-          const hor = equatorialToHorizontal(fixedCoord.ra, fixedCoord.dec, lst, latitude);
-          targetAz = hor.az;
-          targetAlt = hor.alt;
+        if (activeTrackPlanet.startsWith('HIP')) {
+          const hipId = parseInt(activeTrackPlanet.substring(3), 10);
+          const star = starsData.find(s => s.id === hipId);
+          if (star) {
+            const hor = equatorialToHorizontal(star.ra, star.dec, lst, latitude);
+            targetAz = hor.az;
+            targetAlt = hor.alt;
+          }
+        } else {
+          const fixedCoord = DSO_FIXED_COORDS[activeTrackPlanet];
+          if (fixedCoord) {
+            const hor = equatorialToHorizontal(fixedCoord.ra, fixedCoord.dec, lst, latitude);
+            targetAz = hor.az;
+            targetAlt = hor.alt;
+          }
         }
       }
     }
@@ -1147,7 +1172,10 @@ function updatePositionsAndRender() {
 
       // ターゲット天体を正確に捉えた時に観測ログを追加
       if (activeTrackPlanet && Math.abs(diffAz) < 0.25 && Math.abs(diffAlt) < 0.25) {
-        addObservationLog(activeTrackPlanet, false);
+        if (!loggedObjects.has(activeTrackPlanet)) {
+          loggedObjects.add(activeTrackPlanet);
+          addObservationLog(activeTrackPlanet, false);
+        }
       }
 
       viewAzimuth = (viewAzimuth + diffAz * 0.08 + 360) % 360;
@@ -3525,6 +3553,9 @@ function addObservationLog(id: string, isPhoto: boolean, exp?: number, iso?: num
   };
 
   logData.observations.push(entry);
+  if (!isPhoto) {
+    loggedObjects.add(id);
+  }
   
   // 実績の判定
   checkAchievements(logData);
@@ -4039,19 +4070,13 @@ function renderSkyTonightPanel(): void {
     trackBtn.onmouseout  = () => trackBtn.style.background = 'rgba(0,188,212,0.15)';
     trackBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      focusOnObject(item.az, item.alt);
-      if (item.category === 'planet') {
-        activeTrackPlanet = item.name;
-        isPlanetLockOn = true;
-        guideTarget = { az: item.az, alt: item.alt };
-        isAutoRotatingToGuide = true;
-        const lockCb = document.getElementById('toggle-planet-lock') as HTMLInputElement;
-        if (lockCb) lockCb.checked = true;
-      } else {
-        guideTarget = { az: item.az, alt: item.alt };
-        isAutoRotatingToGuide = true;
-      }
-      showToast(`${item.name_ja} に視点を移動します`, 'info');
+      activeTrackPlanet = item.name;
+      isPlanetLockOn = true;
+      guideTarget = { az: item.az, alt: item.alt };
+      isAutoRotatingToGuide = true;
+      const lockCb = document.getElementById('toggle-planet-lock') as HTMLInputElement;
+      if (lockCb) lockCb.checked = true;
+      showToast(`${item.name_ja} に自動導入し、追尾を開始します`, 'info');
       const modal = document.getElementById('sky-tonight-modal');
       if (modal) modal.style.display = 'none';
     });
@@ -4162,6 +4187,7 @@ async function start() {
   updateLightPollutionFog();
   initEnhancedFeaturesV2();
   initSkyTonightUI();
+  initLoggedObjects();
   fetchWeather();
   await loadFromAPI();
   fetchSkyTonight();
