@@ -3191,7 +3191,7 @@ function initEnhancedEvents() {
   if (searchBox && searchSuggests) {
     searchBox.addEventListener('input', () => {
       const q = searchBox.value.toLowerCase();
-      searchSuggests.innerHTML = '';
+      searchSuggests.replaceChildren();
       if (!q) { searchSuggests.style.display = 'none'; return; }
       const results: any[] = [];
       starsData.forEach(s => { if ((s.name_ja && s.name_ja.toLowerCase().includes(q))) results.push({...s, type: '恒星'}); });
@@ -4034,7 +4034,15 @@ function renderSkyTonightPanel(): void {
     statsRow.style.cssText = 'font-size:0.7rem;color:var(--text-secondary);display:flex;gap:10px;flex-wrap:wrap;';
     const makeStat = (label: string, val: string) => {
       const s = document.createElement('span');
-      s.innerHTML = `<span style="color:var(--text-muted)">${label}</span> <strong style="color:var(--text-primary)">${val}</strong>`;
+      const labelSpan = document.createElement('span');
+      labelSpan.style.color = 'var(--text-muted)';
+      labelSpan.textContent = label;
+      const valStrong = document.createElement('strong');
+      valStrong.style.color = 'var(--text-primary)';
+      valStrong.textContent = val;
+      s.appendChild(labelSpan);
+      s.append(' ');
+      s.appendChild(valStrong);
       return s;
     };
     statsRow.appendChild(makeStat('高度', `${item.alt.toFixed(0)}°`));

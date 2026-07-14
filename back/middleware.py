@@ -24,7 +24,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Cache-Control"] = "no-store"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
+        # X-XSS-Protection は Chrome 78+ で廃止済み。CSP が有効なため明示的に無効化する。
+        response.headers["X-XSS-Protection"] = "0"
+        # ブラウザ API へのアクセスを制限（geolocation は観測地設定に必要なため許可）
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(self)"
+        # 本番 HTTPS デプロイ時は以下を有効化してください:
+        # response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
 
 
