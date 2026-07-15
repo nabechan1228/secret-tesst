@@ -4185,6 +4185,25 @@ function initSkyTonightUI(): void {
 // ==========================================
 
 async function start() {
+  // Sentryエラー監視の初期化フック（本番環境用）
+  const sentryDsn = (import.meta.env.VITE_SENTRY_DSN as string | undefined);
+  if (sentryDsn) {
+    try {
+      // 動的インポートにより、Sentryを使用しない場合は初期バンドルサイズを小さく保つ
+      import('@sentry/browser').then((Sentry) => {
+        Sentry.init({
+          dsn: sentryDsn,
+          tracesSampleRate: 1.0,
+        });
+        console.log('Sentry SDK が初期化されました。');
+      }).catch(err => {
+        console.warn('Sentry の動的インポートに失敗しました。', err);
+      });
+    } catch (e) {
+      console.warn('Sentry の初期化処理に失敗しました。', e);
+    }
+  }
+
   viewAltitude = 5;
 
   initWorker();

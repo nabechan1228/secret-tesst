@@ -41,5 +41,20 @@ export default defineConfig(({ mode }) => {
       },
     },
     plugins: [cspConnectSrcPlugin(apiBase)],
+    build: {
+      chunkSizeWarningLimit: 700,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules')) {
+              if (id.includes('three')) {
+                return 'vendor-three';
+              }
+              return 'vendor';
+            }
+          }
+        }
+      }
+    }
   };
 });

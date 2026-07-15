@@ -10,7 +10,7 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, Response
 
-from config import RATE_LIMIT_IP_TTL, get_allowed_origins
+from config import RATE_LIMIT_IP_TTL, get_allowed_origins, IS_PRODUCTION
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +28,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-XSS-Protection"] = "0"
         # ブラウザ API へのアクセスを制限（geolocation は観測地設定に必要なため許可）
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(self)"
-        # 本番 HTTPS デプロイ時は以下を有効化してください:
-        # response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        # 本番環境時は HSTS (HTTP Strict Transport Security) を自動的に有効化
+        if IS_PRODUCTION:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
 
 
