@@ -93,5 +93,57 @@ secret-tesst/
 
 ---
 
+---
+
+## 🧪 テストの実行方法
+
+天体計算ロジックや座標変換処理の正確性を検証するため、バックエンドおよびフロントエンドの両方に自動テストが導入されています。
+
+### 1. バックエンドテストの実行 (pytest)
+`back` ディレクトリ内で実行します。
+```bash
+# 依存パッケージのインストール (すでにインストール済みの場合は不要)
+pip install pytest httpx
+
+# テスト実行
+pytest tests/
+```
+
+### 2. フロントエンドテストの実行 (Vitest)
+`front` ディレクトリ内で実行します。
+```bash
+# テスト実行
+npm run test
+```
+
+---
+
+## ⚙️ 本番環境へのデプロイと環境変数設定
+
+本番環境（本番ドメイン）へ公開する際は、セキュリティおよびエラー監視のために以下の環境変数を設定してください。
+
+### バックエンド環境変数 (Python/FastAPI)
+
+* `ENV=production` または `IS_PRODUCTION=true`
+  * 本番モードを有効化します。有効化されると：
+    * API ドキュメント (`/docs`, `/redoc`) が自動的に非公開になります。
+    * レスポンスヘッダーに `Strict-Transport-Security` (HSTS) が付与されます。
+    * CORS 許可がローカルホスト（localhost）から除外され、`CORS_ORIGINS` で明示されたオリジンのみに制限されます。
+* `CORS_ORIGINS`
+  * CORSでアクセスを許可するフロントエンドの本番URLを指定します（カンマ区切りで複数指定可能）。
+  * 例: `CORS_ORIGINS=https://yourplanetarium.com`
+* `SENTRY_DSN`
+  * 本番環境でバックエンドのエラー監視を行うための Sentry DSN を指定します。
+
+### フロントエンド環境変数 (Vite)
+
+* `VITE_API_BASE_URL`
+  * バックエンドAPIのアドレスを指定します。
+  * 例: `VITE_API_BASE_URL=https://api.yourplanetarium.com`
+* `VITE_SENTRY_DSN`
+  * フロントエンド（ブラウザ）のエラー監視を行うための Sentry DSN を指定します。これが指定された場合、Sentry SDK が動的にインポートされ、初期化されます。
+
+---
+
 ## 💡 詳細な技術仕様について
 天体計算の数学的モデル（ユリウス日、恒星時、座標変換の計算式）、WebWorker のスレッド連携シーケンス、3D 描画システムのオクルージョン設計などの詳細については、[詳細技術仕様書](file:///c:/Users/nabe4/secret-tesst/docs/technical_spec.md) をご参照ください。

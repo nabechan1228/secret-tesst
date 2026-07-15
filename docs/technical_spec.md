@@ -332,3 +332,46 @@ FastAPI で実装されたバックエンドは、精密計算用の天体デー
   # 特定したPID（例: 12345）の強制終了
   taskkill /F /PID 12345
   ```
+
+---
+
+## 6. 本番環境向けセキュリティ設計と環境変数
+
+本プラネタリウムの公開・運用に向け、環境変数 `IS_PRODUCTION=true` (または `ENV=production`) をトリガーとしたセキュリティ自動防御機構を実装しています。
+
+1. **API ドキュメント非公開化**:
+   - `ENABLE_API_DOCS` はデフォルトで `not IS_PRODUCTION` と評価され、本番環境時には `/docs`, `/redoc`, `/openapi.json` が非表示になり、API構造の情報漏洩を防ぎます。
+2. **CORS (Cross-Origin Resource Sharing) 制限の強化**:
+   - 本番環境時には、ローカル開発用オリジン（localhost / 127.0.0.1）が CORS 許可リストから自動的に除外されます。本番ドメインへのアクセスは環境変数 `CORS_ORIGINS` を通してのみ許可されます。環境変数が未設定の場合、アクセスは安全性のためにすべて遮断されます。
+3. **HSTS (HTTP Strict Transport Security) ヘッダー**:
+   - 本番環境下では、通信経路上での盗聴・SSLストリップ攻撃を防ぐため、`SecurityHeadersMiddleware` が自動的に以下のヘッダーを HTTP レスポンスに注入します。
+     `Strict-Transport-Security: max-age=31536000; includeSubDomains`
+
+---
+
+## 7. フロントエンドビルド最適化 (Code Splitting)
+
+本プロジェクトでは WebGL 描画に大型ライブラリである Three.js を使用しており、そのままビルドするとJSバンドルサイズが大きくなり、初期表示遅延を引き起こします。これを解決するため、コード分割設計（Code Splitting）を導入しています。
+
+* **手動チャンク分割 (Rollup manualChunks)**:
+  - [vite.config.ts](file:///c:/Users/nabe4/secret-tesst/front/vite.config.ts) で Rollup の出力設定を調整し、`node_modules` のうち `three` を含む外部ライブラリを別個の JS チャンクとして分離出力します。
+  - アプリケーションコード自体（約 100 KB）と、WebGL 3D レンダリングエンジンである `vendor-three.js` (約 538 KB) に分割することで、ブラウザによる並行ロードが可能になり、ファーストペイントを高速化します。
+
+---
+
+## 8. テストおよび運用保守設計
+
+### 8.1 pytest によるバックエンドテスト
+バックエンドの `back/tests/` ディレクトリ配下に `pytest` による自動テスト環境を構築し、以下の重要ロジックを検証しています。
+* **天体ロジックの整合性**: ユリウス日計算が基準日時 (J2000.0 = JD 2451545.0) に一致すること、地方恒星時 (LST)、および地平座標変換（高度90度となる天頂方向の投影）が誤差 $10^{-5}$ 未満で正確に動作することをテスト。
+* **セキュリティヘッダー検証**: FastAPI の `TestClient` を用いて、`IS_PRODUCTION=true` 時に HSTS ヘッダーが正しく注入されるかの結合検証。
+
+### 8.2 Vitest によるフロントエンドテスト
+フロントエンドの計算ロジックについて、`Vitest` フレームワークによるテストスイートを導入しています。
+* **[calculations.test.ts](file:///c:/Users/nabe4/secret-tesst/front/src/__tests__/calculations.test.ts)**:
+  - ゼロコピー転送する前の座標変換（地平角から天球ドーム三次元ベクトルへの投影等）をユニットテストで網羅。
+
+### 8.3 能動的エラー監視 (Sentry) フック
+本番環境での稼働安定性を高めるため、フロントエンドとバックエンドの双方にエラー監視 (Sentry) のフックを最小限の依存関係で実装しています。
+* **フロントエンド**: `import.meta.env.VITE_SENTRY_DSN` を検知した際、`@sentry/browser` を**動的インポート** (Lazy Load) して初期化します。これにより、Sentryを導入しないビルドでは初期ロードファイルの容量増加を防ぎます。
+* **バックエンド**: `os.environ.get("SENTRY_DSN")` が指定されている場合、`sentry_sdk` および `FastAPIIntegration` を読み込み、APIエラーログを能動監視します。パッケージがインストールされていない場合はエラーでプロセスを止めず、フォールバックの警告ログを表示します。
