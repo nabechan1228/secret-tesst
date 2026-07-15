@@ -285,6 +285,13 @@ def get_local_sidereal_time(jd: float, lng: float) -> float:
         lst += 360.0
     return lst
 
+def safe_parse_datetime(time_str: str) -> datetime:
+    """タイムゾーンを考慮した安全なISO日時文字列のパース"""
+    dt = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
 def parse_time_and_calc_lst(time_str: Optional[str], lng: float) -> tuple[datetime, float, float]:
     """
     ISO日時文字列をパースし、UTCのdatetime、ユリウス日(JD)、および地方恒星時(LST)を返す。
@@ -294,7 +301,7 @@ def parse_time_and_calc_lst(time_str: Optional[str], lng: float) -> tuple[dateti
         if len(time_str) > 64:
             raise HTTPException(status_code=422, detail="リクエストパラメータが不正です。")
         try:
-            dt = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+            dt = safe_parse_datetime(time_str)
         except ValueError:
             logger.warning("不正な time 文字列を受信: %r", time_str)
             raise HTTPException(status_code=422, detail="リクエストパラメータが不正です。")
@@ -979,7 +986,7 @@ def get_meteor_showers(
     """
     if time:
         try:
-            dt = datetime.fromisoformat(time.replace('Z', '+00:00'))
+            dt = safe_parse_datetime(time)
         except ValueError:
             logger.warning("不正な time 文字列を受信 (meteor-showers): %r", time)
             raise HTTPException(status_code=422, detail="リクエストパラメータが不正です。")
@@ -1076,18 +1083,21 @@ def get_meteor_showers(
     }
 
 @app.get("/api/weather", response_model=WeatherResponse)
-def get_weather(
+async def get_weather(
     lat: float = Query(35.68, ge=-90.0, le=90.0, description="観測緯度 (度, -90 ~ 90)"),
     lng: float = Query(139.76, ge=-180.0, le=180.0, description="観測経度 (度, -180 ~ 180)")
 ):
     """
-    指定された座標の現在天気を wttr.in API からプロキシして取得する。
+    指定された座標の現在天気を wttr.in API から非同期にプロキシして取得する。
     """
     url = f"https://wttr.in/{lat},{lng}?format=j1"
+    headers = {"User-Agent": "Stellaris-Planetarium"}
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Stellaris-Planetarium"})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+            data = response.json()
             current = data.get("current_condition", [{}])[0]
             return {
                 "temperature": float(current.get("temp_C", 15.0)),

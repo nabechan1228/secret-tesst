@@ -1,12 +1,12 @@
 import sys
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import pytest
 
 # パス設定（親ディレクトリをインポートパスに追加）
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from main import get_julian_date, get_local_sidereal_time, equatorial_to_horizontal
+from main import get_julian_date, get_local_sidereal_time, equatorial_to_horizontal, safe_parse_datetime
 
 def test_get_julian_date():
     # 2000年1月1日 12:00 UTC (JD=2451545.0)
@@ -56,4 +56,21 @@ def test_production_headers():
     importlib.reload(config)
     importlib.reload(middleware)
     importlib.reload(main)
+
+def test_safe_parse_datetime():
+    # タイムゾーンあり (Z)
+    dt1 = safe_parse_datetime("2026-07-15T12:00:00Z")
+    assert dt1.tzinfo == timezone.utc
+    assert dt1.hour == 12
+
+    # タイムゾーンなし (Naive -> UTC)
+    dt2 = safe_parse_datetime("2026-07-15T12:00:00")
+    assert dt2.tzinfo == timezone.utc
+    assert dt2.hour == 12
+
+    # オフセットあり
+    dt3 = safe_parse_datetime("2026-07-15T12:00:00+09:00")
+    assert dt3.tzinfo is not None
+    assert dt3.utcoffset() == timedelta(hours=9)
+
 
