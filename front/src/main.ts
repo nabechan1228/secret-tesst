@@ -44,6 +44,7 @@ import {
   formatDate,
   setObsModeDescription,
   populateConstellationSelect,
+  escapeHtml,
   updatePlanetTrackerUI,
   showConstellationInfo,
   hideConstellationInfo
@@ -4084,7 +4085,7 @@ function renderSkyTonightPanel(): void {
       isAutoRotatingToGuide = true;
       const lockCb = document.getElementById('toggle-planet-lock') as HTMLInputElement;
       if (lockCb) lockCb.checked = true;
-      showToast(`${item.name_ja} に自動導入し、追尾を開始します`, 'info');
+      showToast(`${escapeHtml(item.name_ja)} に自動導入し、追尾を開始します`, 'info');
       const modal = document.getElementById('sky-tonight-modal');
       if (modal) modal.style.display = 'none';
     });

@@ -34,6 +34,14 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+def get_client_ip(request: Request) -> str:
+    """リバースプロキシ環境を考慮したクライアント IP の取得"""
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """IP アドレスベースの簡易レート制限（スライディングウィンドウ方式）"""
 
@@ -61,7 +69,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             self._last_access.pop(ip, None)
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = get_client_ip(request)
         path = request.url.path
         now = time.time()
 

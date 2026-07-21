@@ -17,12 +17,29 @@ STATIONS_URL = 'https://celestrak.org/NORAD/elements/stations.txt'
 def get_satellites_position(dt_utc: datetime, lat: float, lng: float) -> list:
     """
     指定日時のISS(国際宇宙ステーション)等の位置を計算して返す
+    ネットワークエラー時はローカルキャッシュを優先使用
     """
+    cache_file = os.path.join(DATA_DIR, 'stations.txt')
+    satellites = None
+
+    # 外部URLからの取得を試みる
     try:
-        # TLEファイルの取得 (キャッシュ有効化)
-        satellites = load.tle_file(STATIONS_URL, filename=os.path.join(DATA_DIR, 'stations.txt'))
+        satellites = load.tle_file(STATIONS_URL, filename=cache_file)
+    except Exception as download_err:
+        logger.warning(f"CelesTrak からの TLE 取得に失敗しました ({download_err})。ローカルキャッシュを確認します。")
+        if os.path.exists(cache_file):
+            try:
+                satellites = load.tle_file(cache_file)
+            except Exception as local_err:
+                logger.error(f"ローカル TLE キャッシュの読み込みにも失敗しました: {local_err}")
+        else:
+            logger.error("ローカル TLE キャッシュファイルが存在しません。")
+
+    if not satellites:
+        return []
+
+    try:
         by_name = {sat.name: sat for sat in satellites}
-        
         results = []
         
         # 今回は ISS (ZARYA) を対象とする
@@ -58,5 +75,5 @@ def get_satellites_position(dt_utc: datetime, lat: float, lng: float) -> list:
         return results
         
     except Exception as e:
-        logger.error(f"衛星データの取得・計算に失敗しました: {e}")
+        logger.error(f"衛星位置の計算処理でエラーが発生しました: {e}")
         return []

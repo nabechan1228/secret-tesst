@@ -1082,6 +1082,9 @@ def get_meteor_showers(
         "showers": active_showers
     }
 
+_WEATHER_CACHE: Dict[tuple, tuple[float, dict]] = {}
+_WEATHER_CACHE_TTL = 600.0  # 10分間有効
+
 @app.get("/api/weather", response_model=WeatherResponse)
 async def get_weather(
     lat: float = Query(35.68, ge=-90.0, le=90.0, description="観測緯度 (度, -90 ~ 90)"),
@@ -1089,7 +1092,17 @@ async def get_weather(
 ):
     """
     指定された座標の現在天気を wttr.in API から非同期にプロキシして取得する。
+    10分間のインメモリキャッシュを適用。
     """
+    import time
+    cache_key = (round(lat, 2), round(lng, 2))
+    now = time.time()
+
+    if cache_key in _WEATHER_CACHE:
+        cached_time, cached_data = _WEATHER_CACHE[cache_key]
+        if now - cached_time < _WEATHER_CACHE_TTL:
+            return cached_data
+
     url = f"https://wttr.in/{lat},{lng}?format=j1"
     headers = {"User-Agent": "Stellaris-Planetarium"}
     try:
@@ -1099,12 +1112,14 @@ async def get_weather(
             response.raise_for_status()
             data = response.json()
             current = data.get("current_condition", [{}])[0]
-            return {
+            result = {
                 "temperature": float(current.get("temp_C", 15.0)),
                 "humidity": float(current.get("humidity", 50.0)),
                 "wind_speed": float(current.get("windspeedKmph", 0.0)),
                 "cloud_cover": float(current.get("cloudcover", 0.0)),
             }
+            _WEATHER_CACHE[cache_key] = (now, result)
+            return result
     except Exception as e:
         logger.warning("天気APIの取得に失敗したため、デフォルト値を返します: %s", e)
         return {

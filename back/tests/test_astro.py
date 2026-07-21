@@ -73,4 +73,30 @@ def test_safe_parse_datetime():
     assert dt3.tzinfo is not None
     assert dt3.utcoffset() == timedelta(hours=9)
 
+def test_x_forwarded_for_ip():
+    import middleware
+    from fastapi import Request
+
+    scope = {
+        "type": "http",
+        "headers": [(b"x-forwarded-for", b"203.0.113.195, 70.41.3.18")],
+        "client": ("127.0.0.1", 8000),
+    }
+    req = Request(scope)
+    ip = middleware.get_client_ip(req)
+    assert ip == "203.0.113.195"
+
+def test_weather_cache():
+    import main
+    from fastapi.testclient import TestClient
+    client = TestClient(main.app)
+    
+    # 1回目のリクエスト
+    res1 = client.get("/api/weather?lat=35.68&lng=139.76")
+    assert res1.status_code == 200
+    
+    # キャッシュが存在することを確認
+    cache_key = (35.68, 139.76)
+    assert cache_key in main._WEATHER_CACHE
+
 
