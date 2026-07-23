@@ -12,8 +12,11 @@ import {
   PlanetRecommendation,
   PlanetData,
   DSOData,
-  ObsMode
+  ObsMode,
+  FilterMode,
+  EclipseEvent
 } from './types';
+import { TOUR_SCENARIOS, SkyTourController } from './sky-tour';
 
 import {
   API_BASE,
@@ -3115,6 +3118,9 @@ function tweenTo(start: number, end: number, duration: number, onUpdate: (v:numb
 
 let satellitesData: any[] = [];
 let satellitesSprites: Map<string, THREE.Sprite> = new Map();
+let satellitesLines: Map<string, THREE.Line> = new Map();
+let showSatOrbit: boolean = true;
+
 async function fetchSatellites() {
   const timeStr = encodeURIComponent(currentDate.toISOString());
   const data = await fetchJson<{ satellites?: unknown[] }>(
@@ -3133,28 +3139,308 @@ function updateSatelliteSprites() {
   satellitesData.forEach(sat => {
     let sprite = satellitesSprites.get(sat.id);
     if (!sprite) {
-      const tex = createStarTexture(sat.color);
+      const tex = createStarTexture(sat.color || '#00e5ff');
       const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, blending: THREE.AdditiveBlending });
       sprite = new THREE.Sprite(mat);
-      sprite.scale.set(8, 8, 1);
+      sprite.scale.set(10, 10, 1);
       scene.add(sprite);
       satellitesSprites.set(sat.id, sprite);
     }
     const { x, y, z } = horizonToCartesian(sat.az, sat.alt, DOME_RADIUS - 10);
     sprite.position.set(x, y, z);
     sprite.visible = sat.alt > -5;
+
+    // 軌道予測線の描画
+    if (sat.orbit_path && sat.orbit_path.length > 1) {
+      let line = satellitesLines.get(sat.id);
+      const points: THREE.Vector3[] = sat.orbit_path.map((pt: any) => {
+        const p = horizonToCartesian(pt.az, pt.alt, DOME_RADIUS - 12);
+        return new THREE.Vector3(p.x, p.y, p.z);
+      });
+      const geometry = new THREE.BufferGeometry().setFromPoints(points);
+
+      if (!line) {
+        const material = new THREE.LineDashedMaterial({
+          color: new THREE.Color(sat.color || '#00e5ff'),
+          dashSize: 15,
+          gapSize: 8,
+          scale: 1,
+          transparent: true,
+          opacity: 0.7,
+        });
+        line = new THREE.Line(geometry, material);
+        line.computeLineDistances();
+        scene.add(line);
+        satellitesLines.set(sat.id, line);
+      } else {
+        line.geometry.dispose();
+        line.geometry = geometry;
+        line.computeLineDistances();
+      }
+      line.visible = showSatOrbit && sat.alt > -15;
+    }
   });
 }
 
 
 function focusOnObject(az: number, alt: number) {
+  focusOnObjectWithFov(az, alt, 25, 1200);
+}
+
+function focusOnObjectWithFov(az: number, alt: number, fov: number = 30, durationMs: number = 1500) {
   let targetAz = az;
   let diff = targetAz - viewAzimuth;
   while (diff > 180) diff -= 360;
   while (diff < -180) diff += 360;
-  tweenTo(viewAzimuth, viewAzimuth + diff, 1200, (v) => viewAzimuth = v);
-  tweenTo(viewAltitude, alt, 1200, (v) => viewAltitude = v);
-  tweenTo(baseFov, 25, 1200, (v) => { baseFov = v; camera.fov = baseFov; camera.updateProjectionMatrix(); });
+  tweenTo(viewAzimuth, viewAzimuth + diff, durationMs, (v) => viewAzimuth = v);
+  tweenTo(viewAltitude, alt, durationMs, (v) => viewAltitude = v);
+  tweenTo(baseFov, fov, durationMs, (v) => { baseFov = v; camera.fov = baseFov; camera.updateProjectionMatrix(); });
+}
+
+// ------------------------------------------
+// 新機能 1: ガイド付きスカイツアー
+// ------------------------------------------
+const skyTourController = new SkyTourController();
+
+function initSkyTourFeature() {
+  const btnOpenTour = document.getElementById('btn-open-sky-tour');
+  if (!btnOpenTour) return;
+
+  // ツアー制御オーバーレイUI
+  let tourOverlay = document.getElementById('sky-tour-overlay');
+  if (!tourOverlay) {
+    tourOverlay = document.createElement('div');
+    tourOverlay.id = 'sky-tour-overlay';
+    tourOverlay.style.cssText = `
+      position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+      background: rgba(15, 23, 42, 0.92); border: 1px solid rgba(124, 58, 237, 0.5);
+      backdrop-filter: blur(12px); border-radius: 16px; padding: 16px 24px;
+      color: #fff; z-index: 1000; width: 90%; max-width: 520px; box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+      display: none; transition: all 0.3s ease;
+    `;
+    document.body.appendChild(tourOverlay);
+  }
+
+  // ツアー選択モーダル
+  let tourModal = document.getElementById('modal-sky-tour');
+  if (!tourModal) {
+    tourModal = document.createElement('div');
+    tourModal.id = 'modal-sky-tour';
+    tourModal.style.cssText = `
+      position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(8px);
+      z-index: 2000; display: none; align-items: center; justify-content: center;
+    `;
+    tourModal.innerHTML = `
+      <div style="background:#0f172a; border:1px solid #7c3aed; border-radius:16px; width:90%; max-width:550px; padding:24px; color:#fff; position:relative; box-shadow:0 20px 40px rgba(0,0,0,0.6);">
+        <button id="btn-close-tour-modal" style="position:absolute; top:16px; right:16px; background:none; border:none; color:#94a3b8; font-size:1.4rem; cursor:pointer;">✕</button>
+        <h2 style="margin-top:0; color:#c084fc; font-size:1.3rem; display:flex; align-items:center; gap:8px;">
+          🚀 ガイド付きスカイツアー一覧
+        </h2>
+        <p style="color:#94a3b8; font-size:0.85rem; margin-bottom:16px;">テーマに沿った見どころ天体を全自動でツアー鑑賞できます。</p>
+        <div id="tour-scenarios-list" style="display:flex; flex-direction:column; gap:12px; max-height:360px; overflow-y:auto;"></div>
+      </div>
+    `;
+    document.body.appendChild(tourModal);
+
+    document.getElementById('btn-close-tour-modal')?.addEventListener('click', () => {
+      if (tourModal) tourModal.style.display = 'none';
+    });
+  }
+
+  const listContainer = document.getElementById('tour-scenarios-list');
+  if (listContainer) {
+    listContainer.innerHTML = '';
+    TOUR_SCENARIOS.forEach(scenario => {
+      const card = document.createElement('div');
+      card.style.cssText = `
+        background: rgba(30, 41, 59, 0.8); border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 12px; padding: 14px; cursor: pointer; transition: all 0.2s;
+      `;
+      card.innerHTML = `
+        <div style="font-weight:bold; color:#f1f5f9; font-size:1rem;">${scenario.title}</div>
+        <div style="color:#94a3b8; font-size:0.82rem; margin-top:4px;">${scenario.description} (${scenario.steps.length}スポット)</div>
+      `;
+      card.onmouseover = () => { card.style.borderColor = '#c084fc'; card.style.background = 'rgba(124, 58, 237, 0.2)'; };
+      card.onmouseout = () => { card.style.borderColor = 'rgba(148, 163, 184, 0.2)'; card.style.background = 'rgba(30, 41, 59, 0.8)'; };
+      card.onclick = () => {
+        if (tourModal) tourModal.style.display = 'none';
+        skyTourController.startTour(scenario.id);
+      };
+      listContainer.appendChild(card);
+    });
+  }
+
+  btnOpenTour.addEventListener('click', () => {
+    if (tourModal) tourModal.style.display = 'flex';
+  });
+
+  // スイツアーイベントハンドラー
+  skyTourController.onStepChange = (step, idx, total) => {
+    if (!tourOverlay) return;
+    tourOverlay.style.display = 'block';
+    tourOverlay.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <span style="font-size:0.75rem; background:#7c3aed; color:#fff; padding:2px 8px; border-radius:12px; font-weight:bold;">
+          STEP ${idx} / ${total}
+        </span>
+        <button id="btn-stop-tour" style="background:none; border:none; color:#ef4444; font-size:0.8rem; cursor:pointer; font-weight:bold;">ツアー終了 ✕</button>
+      </div>
+      <div style="font-weight:bold; font-size:1.1rem; color:#f8fafc; margin-bottom:4px;">${step.title}</div>
+      <div style="font-size:0.85rem; color:#cbd5e1; line-height:1.4; margin-bottom:12px;">${step.description}</div>
+      <div style="display:flex; gap:8px; justify-content:center;">
+        <button id="btn-prev-tour" class="btn" style="padding:4px 12px; font-size:0.8rem; border-radius:6px; background:#334155; color:#fff;">◀ 前へ</button>
+        <button id="btn-pause-tour" class="btn" style="padding:4px 12px; font-size:0.8rem; border-radius:6px; background:#7c3aed; color:#fff;">${skyTourController.getIsPaused() ? '▶ 再開' : '❚❚ 一時停止'}</button>
+        <button id="btn-next-tour" class="btn" style="padding:4px 12px; font-size:0.8rem; border-radius:6px; background:#334155; color:#fff;">次へ ▶</button>
+      </div>
+    `;
+
+    focusOnObjectWithFov(step.targetAz, step.targetAlt, step.zoomLevel, 1200);
+
+    document.getElementById('btn-stop-tour')?.addEventListener('click', () => skyTourController.stopTour());
+    document.getElementById('btn-prev-tour')?.addEventListener('click', () => skyTourController.prevStep());
+    document.getElementById('btn-next-tour')?.addEventListener('click', () => skyTourController.nextStep());
+    document.getElementById('btn-pause-tour')?.addEventListener('click', () => {
+      if (skyTourController.getIsPaused()) skyTourController.resumeTour();
+      else skyTourController.pauseTour();
+    });
+  };
+
+  skyTourController.onTourEnd = () => {
+    if (tourOverlay) tourOverlay.style.display = 'none';
+    showToast('スカイツアーが終了しました', 'info');
+  };
+}
+
+// ------------------------------------------
+// 新機能 2: 日食・月食イベント一覧
+// ------------------------------------------
+function initEclipseEventsFeature() {
+  const btnOpenEclipses = document.getElementById('btn-open-eclipses');
+  if (!btnOpenEclipses) return;
+
+  let eclipseModal = document.getElementById('modal-eclipses');
+  if (!eclipseModal) {
+    eclipseModal = document.createElement('div');
+    eclipseModal.id = 'modal-eclipses';
+    eclipseModal.style.cssText = `
+      position: fixed; inset: 0; background: rgba(0,0,0,0.75); backdrop-filter: blur(8px);
+      z-index: 2000; display: none; align-items: center; justify-content: center;
+    `;
+    eclipseModal.innerHTML = `
+      <div style="background:#0f172a; border:1px solid #db2777; border-radius:16px; width:90%; max-width:580px; padding:24px; color:#fff; position:relative; box-shadow:0 20px 40px rgba(0,0,0,0.6);">
+        <button id="btn-close-eclipse-modal" style="position:absolute; top:16px; right:16px; background:none; border:none; color:#94a3b8; font-size:1.4rem; cursor:pointer;">✕</button>
+        <h2 style="margin-top:0; color:#f472b6; font-size:1.3rem; display:flex; align-items:center; gap:8px;">
+          🌒 注目 日食・月食イベント
+        </h2>
+        <p style="color:#94a3b8; font-size:0.85rem; margin-bottom:16px;">歴史的な皆既日食・皆既月食の観測タイミングへ1クリックでタイムジャンプします。</p>
+        <div id="eclipse-events-list" style="display:flex; flex-direction:column; gap:12px; max-height:380px; overflow-y:auto;">
+          <div style="text-align:center; color:#94a3b8; padding:20px;">イベント一覧を読み込み中...</div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(eclipseModal);
+
+    document.getElementById('btn-close-eclipse-modal')?.addEventListener('click', () => {
+      if (eclipseModal) eclipseModal.style.display = 'none';
+    });
+  }
+
+  btnOpenEclipses.addEventListener('click', async () => {
+    if (eclipseModal) eclipseModal.style.display = 'flex';
+    const listContainer = document.getElementById('eclipse-events-list');
+    if (!listContainer) return;
+
+    const data = await fetchJson<{ events?: EclipseEvent[] }>(`${API_BASE}/api/eclipses`, 'Eclipses');
+    if (data && data.events) {
+      listContainer.innerHTML = '';
+      data.events.forEach(evt => {
+        const item = document.createElement('div');
+        item.style.cssText = `
+          background: rgba(30, 41, 59, 0.8); border: 1px solid rgba(219, 39, 119, 0.3);
+          border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 6px;
+        `;
+        const icon = evt.type === 'solar' ? '☀️🌑' : '🌕🔴';
+        const formattedDate = new Date(evt.datetime).toLocaleString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        
+        item.innerHTML = `
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span style="font-weight:bold; font-size:1rem; color:#fbcfe8;">${icon} ${evt.name}</span>
+            <span style="font-size:0.75rem; background:#831843; color:#f472b6; padding:2px 8px; border-radius:10px;">${formattedDate}</span>
+          </div>
+          <div style="font-size:0.83rem; color:#cbd5e1;">${evt.description}</div>
+          <div style="font-size:0.78rem; color:#94a3b8; font-style:italic;">📍 ${evt.visibility_note}</div>
+          <button class="btn btn-accent btn-sim-eclipse" style="margin-top:6px; padding:6px 12px; font-size:0.8rem; background:linear-gradient(135deg, #db2777 0%, #9333ea 100%); border-radius:8px;">
+            この日時・位置でシミュレート 🚀
+          </button>
+        `;
+
+        item.querySelector('.btn-sim-eclipse')?.addEventListener('click', () => {
+          currentDate = new Date(evt.datetime);
+          const dateInput = document.getElementById('input-date') as HTMLInputElement;
+          if (dateInput) dateInput.value = formatDate(currentDate);
+
+          if (eclipseModal) eclipseModal.style.display = 'none';
+          showToast(`${evt.name} の日時（${formattedDate}）へジャンプしました！`, 'info');
+
+          if (evt.type === 'solar') {
+            focusOnObjectWithFov(180, 45, 10, 1200);
+          } else {
+            focusOnObjectWithFov(180, 50, 15, 1200);
+          }
+          loadFromAPI();
+        });
+
+        listContainer.appendChild(item);
+      });
+    } else {
+      listContainer.innerHTML = '<div style="color:#ef4444; padding:12px;">イベントデータの取得に失敗しました。</div>';
+    }
+  });
+}
+
+// ------------------------------------------
+// 新機能 3: 天体観測フィルター & 衛星トグル
+// ------------------------------------------
+function initFilterAndOrbitToggles() {
+  const toggleSatOrbit = document.getElementById('toggle-sat-orbit') as HTMLInputElement;
+  if (toggleSatOrbit) {
+    toggleSatOrbit.addEventListener('change', () => {
+      showSatOrbit = toggleSatOrbit.checked;
+      satellitesLines.forEach(line => line.visible = showSatOrbit);
+    });
+  }
+
+  const selectFilter = document.getElementById('select-astro-filter') as HTMLSelectElement;
+  if (selectFilter) {
+    selectFilter.addEventListener('change', () => {
+      const mode = selectFilter.value as FilterMode;
+      const canvas = renderer?.domElement;
+      if (!canvas) return;
+
+      switch (mode) {
+        case 'h_alpha':
+          canvas.style.filter = 'contrast(135%) saturate(170%) hue-rotate(-25deg)';
+          showToast('H-α フィルター適用: 水素アルファ輝線・赤色星雲を強調', 'info');
+          break;
+        case 'o_iii':
+          canvas.style.filter = 'contrast(140%) saturate(180%) hue-rotate(125deg)';
+          showToast('O-III フィルター適用: 電離酸素・惑星状星雲を強調', 'info');
+          break;
+        case 'lrgb':
+          canvas.style.filter = 'contrast(115%) brightness(110%) saturate(130%)';
+          showToast('LRGB フィルター適用: 明瞭度と微弱光の強調', 'info');
+          break;
+        case 'infrared':
+          canvas.style.filter = 'invert(15%) contrast(150%) hue-rotate(270deg) saturate(200%)';
+          showToast('赤外線 (Infrared) フィルター適用: ダスト透過波長シミュレーション', 'info');
+          break;
+        default:
+          canvas.style.filter = 'none';
+          showToast('フィルター解除: 標準表示', 'info');
+          break;
+      }
+    });
+  }
 }
 
 function initEnhancedEvents() {
@@ -4216,6 +4502,9 @@ async function start() {
   initEnhancedFeaturesV2();
   initSkyTonightUI();
   initLoggedObjects();
+  initSkyTourFeature();
+  initEclipseEventsFeature();
+  initFilterAndOrbitToggles();
   fetchWeather();
   await loadFromAPI();
   fetchSkyTonight();

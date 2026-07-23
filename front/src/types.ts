@@ -78,4 +78,54 @@ export interface AsterismGuide {
   linePairs: [number, number][];
 }
 
+export interface OrbitPoint {
+  time_offset_min: number;
+  ra: number;
+  dec: number;
+  az: number;
+  alt: number;
+}
+
+export interface SatelliteData {
+  id: string;
+  name: string;
+  name_ja: string;
+  ra: number;
+  dec: number;
+  az: number;
+  alt: number;
+  mag: number;
+  color: string;
+  type: string;
+  orbit_path?: OrbitPoint[];
+}
+
+export interface TourStep {
+  title: string;
+  targetAz: number;
+  targetAlt: number;
+  zoomLevel: number; // FOV (度)
+  durationSec: number;
+  description: string;
+  highlightCategory?: 'star' | 'constellation' | 'planet' | 'dso';
+}
+
+export interface TourScenario {
+  id: string;
+  title: string;
+  description: string;
+  steps: TourStep[];
+}
+
+export type FilterMode = 'none' | 'h_alpha' | 'o_iii' | 'lrgb' | 'infrared';
+
+export interface EclipseEvent {
+  id: string;
+  name: string;
+  type: 'solar' | 'lunar';
+  datetime: string;
+  description: string;
+  visibility_note: string;
+}
+
 export type ObsMode = 'none' | 'binoculars' | 'telescope';

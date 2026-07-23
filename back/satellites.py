@@ -59,17 +59,35 @@ def get_satellites_position(dt_utc: datetime, lat: float, lng: float) -> list:
             alt, az, distance = topocentric.altaz()
             ra, dec, distance_eq = topocentric.radec()
             
+            # 軌道予測計算 (前後20分間、5分刻みで9地点)
+            from datetime import timedelta
+            orbit_path = []
+            for offset_minutes in range(-20, 25, 5):
+                sample_dt = dt_utc + timedelta(minutes=offset_minutes)
+                t_sample = ts.from_datetime(sample_dt)
+                topo_sample = (iss - topos).at(t_sample)
+                alt_s, az_s, _ = topo_sample.altaz()
+                ra_s, dec_s, _ = topo_sample.radec()
+                orbit_path.append({
+                    "time_offset_min": offset_minutes,
+                    "ra": ra_s.hours,
+                    "dec": dec_s.degrees,
+                    "az": round(az_s.degrees, 2),
+                    "alt": round(alt_s.degrees, 2),
+                })
+
             results.append({
                 "id": "iss",
                 "name": "ISS",
                 "name_ja": "国際宇宙ステーション",
                 "ra": ra.hours,
                 "dec": dec.degrees,
-                "az": az.degrees,
-                "alt": alt.degrees,
+                "az": round(az.degrees, 2),
+                "alt": round(alt.degrees, 2),
                 "mag": -2.0,       # 非常に明るいとする
-                "color": "#ffffff", # 白色
-                "type": "satellite"
+                "color": "#00e5ff", # エレクトリックシアン
+                "type": "satellite",
+                "orbit_path": orbit_path,
             })
             
         return results

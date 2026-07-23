@@ -172,6 +172,13 @@ class SkyResponse(BaseModel):
     deep_sky_objects: List[DSOOut]
     recommendation: RecommendationOut
 
+class OrbitPointOut(BaseModel):
+    time_offset_min: int
+    ra: float
+    dec: float
+    az: float
+    alt: float
+
 class SatelliteOut(BaseModel):
     id: str
     name: str
@@ -183,9 +190,21 @@ class SatelliteOut(BaseModel):
     mag: float
     color: str
     type: str
+    orbit_path: Optional[List[OrbitPointOut]] = None
 
 class SatellitesResponse(BaseModel):
     satellites: List[SatelliteOut]
+
+class EclipseEventOut(BaseModel):
+    id: str
+    name: str
+    type: str  # 'solar' | 'lunar'
+    datetime: str
+    description: str
+    visibility_note: str
+
+class EclipsesResponse(BaseModel):
+    events: List[EclipseEventOut]
 
 class ConstellationsResponse(BaseModel):
     constellations: Dict[str, Any]
@@ -1143,6 +1162,48 @@ def get_sky_tonight_endpoint(
     dt_utc, jd, lst = parse_time_and_calc_lst(time, lng)
     result = get_sky_tonight(dt_utc, lat, lng, jd, lst)
     return result
+
+
+@app.get("/api/eclipses", response_model=EclipsesResponse)
+def get_eclipses():
+    """
+    注目すべき日食・月食イベントのプリセット一覧を返す
+    """
+    events = [
+        {
+            "id": "lunar_2025_09",
+            "name": "2025年9月7日 皆既月食",
+            "type": "lunar",
+            "datetime": "2025-09-07T18:12:00Z",
+            "description": "日本全国で観測可能な美しい皆既月食。月が地球の暗い本影に入り赤銅色に染まります。",
+            "visibility_note": "アジア・オセアニア全域で好条件"
+        },
+        {
+            "id": "solar_2026_08",
+            "name": "2026年8月12日 皆既日食",
+            "type": "solar",
+            "datetime": "2026-08-12T17:47:00Z",
+            "description": "大西洋・ヨーロッパを横断する感動的な皆既日食。太陽が月によって完全に覆われます。",
+            "visibility_note": "スペイン・グリーンランド等で皆既観測可能"
+        },
+        {
+            "id": "lunar_2028_12",
+            "name": "2028年12月31日 皆既月食",
+            "type": "lunar",
+            "datetime": "2028-12-31T16:53:00Z",
+            "description": "大晦日の夜に起こる特別な皆既月食。深夜の天球高くで満月が赤銅色に変化します。",
+            "visibility_note": "日本全国で真夜中に最高条件で観察可能"
+        },
+        {
+            "id": "solar_2035_09",
+            "name": "2035年9月2日 北陸・関東 皆既日食",
+            "type": "solar",
+            "datetime": "2035-09-02T01:00:00Z",
+            "description": "日本の陸上（富山・長野・群馬・栃木・茨城）で26年ぶりに観測できる歴史的な皆既日食。",
+            "visibility_note": "日本本州中央部で2分以上にわたり皆既日食"
+        }
+    ]
+    return {"events": events}
 
 
 @app.get("/health", response_model=HealthResponse)

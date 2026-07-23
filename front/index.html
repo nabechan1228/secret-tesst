@@ -783,6 +783,14 @@
             <button id="btn-open-logbook" class="btn btn-accent" style="width:100%;padding:8px;border-radius:8px;font-weight:bold;margin-top:6px;background:linear-gradient(135deg, #00acc1 0%, #0077c2 100%);">
               📖 観測ログ & 実績 (Logbook)
             </button>
+
+            <button id="btn-open-sky-tour" class="btn btn-accent" style="width:100%;padding:8px;border-radius:8px;font-weight:bold;margin-top:6px;background:linear-gradient(135deg, #7b1fa2 0%, #512da8 100%);">
+              🚀 ガイド付きスカイツアー
+            </button>
+
+            <button id="btn-open-eclipses" class="btn btn-accent" style="width:100%;padding:8px;border-radius:8px;font-weight:bold;margin-top:6px;background:linear-gradient(135deg, #d81b60 0%, #8e24aa 100%);">
+              🌒 注目 日食・月食イベント
+            </button>
           </div>
         </div>
 
@@ -832,6 +840,23 @@
                 <input type="checkbox" id="toggle-moon-map">
                 <span class="slider"></span>
               </label>
+            </div>
+            <div class="control-row">
+              <label for="toggle-sat-orbit">衛星軌道表示</label>
+              <label class="switch">
+                <input type="checkbox" id="toggle-sat-orbit" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="control-row" style="margin-top:6px;">
+              <label for="select-astro-filter">観測フィルター</label>
+              <select id="select-astro-filter" style="background:#1e293b; color:#e2e8f0; border:1px solid #475569; border-radius:4px; padding:2px 6px;">
+                <option value="none">なし (Standard)</option>
+                <option value="h_alpha">H-α (星雲コントラスト)</option>
+                <option value="o_iii">O-III (惑星状星雲)</option>
+                <option value="lrgb">LRGB (広帯域撮影)</option>
+                <option value="infrared">赤外線 (Infrared)</option>
+              </select>
             </div>
           </div>
         </div>
